@@ -628,6 +628,112 @@ def get_econ(gid, uid):
 
 START_TIME = time.time()
 
+# ─── MISSING CONSTANTS & HELPERS (added to fix NameErrors) ───────────────────
+
+# Secret role name (used by !assign / !remove / !secret commands)
+# Set DISCORD_SECRET_ROLE env var on Railway, or change the default string here.
+secret_role = os.getenv("DISCORD_SECRET_ROLE", "Secret")
+
+# Passive XP tuning
+MESSAGE_XP_COOLDOWN  = 60     # seconds between message-XP awards per user
+MESSAGE_XP_MIN       = 15     # minimum XP gained per eligible message
+MESSAGE_XP_MAX       = 25     # maximum XP gained per eligible message
+VOICE_XP_PER_MINUTE  = 5      # XP awarded per full minute in a voice channel
+
+# Hangman ASCII stages (index = number of wrong guesses, 0-6)
+HANGMAN_STAGES = [
+    "```\n  +---+\n  |   |\n      |\n      |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n      |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n  |   |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|   |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n /    |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n / \\  |\n      |\n=========```",
+]
+
+def render_hangman(game: dict) -> str:
+    """Return a formatted string showing the current hangman game state."""
+    wrong_count = len(game.get("wrong", set()))
+    stage = HANGMAN_STAGES[min(wrong_count, len(HANGMAN_STAGES) - 1)]
+    word = game.get("word", "")
+    guessed = game.get("guessed", set())
+    display = " ".join(c if c in guessed else "_" for c in word)
+    wrong_letters = ", ".join(sorted(game.get("wrong", set()))) or "None | هیچ"
+    lives_left = 6 - wrong_count
+    return (
+        f"{stage}\n"
+        f"**Word | وشە:** `{display}`\n"
+        f"**Wrong | هەڵە:** {wrong_letters}\n"
+        f"**Lives left | ژیانی ماوە:** {lives_left}/6"
+    )
+
+# ─── WELCOME EMBED SETTINGS HELPERS ─────────────────────────────────────────
+
+_WES_DEFAULTS = {
+    "title":         "🎉 بەخێربێیت بۆ {guild}! | Welcome to {guild}!",
+    "description":   "خۆشحاڵین بینینت، {user}! | We're glad to see you, {user}!",
+    "color":         0xFFD700,
+    "image_url":     "",
+    "thumbnail_url": "avatar",
+    "invite_text":   "Invited by {inviter} · {count} invite(s)",
+    "channel_id":    "",
+}
+
+def get_welcome_embed_settings(guild_id) -> dict:
+    """Return the welcome embed settings dict for *guild_id* (with defaults)."""
+    gid = str(guild_id)
+    stored = welcome_embed_settings.get(gid, {})
+    merged = dict(_WES_DEFAULTS)
+    merged.update(stored)
+    return merged
+
+def save_welcome_embed_setting(guild_id, **kwargs):
+    """Update one or more welcome embed setting keys and persist."""
+    gid = str(guild_id)
+    if gid not in welcome_embed_settings:
+        welcome_embed_settings[gid] = {}
+    welcome_embed_settings[gid].update(kwargs)
+    save_welcome_embed_settings()   # calls _save_all()
+
+def apply_welcome_placeholders(
+    text: str,
+    member,
+    inviter=None,
+    inv_total: int = 0,
+    channel_id: str = "",
+) -> str:
+    """Replace {user}, {guild}, {inviter}, {count}, (channelid) placeholders."""
+    if not text:
+        return text
+    inviter_str = inviter.mention if inviter else "Unknown"
+    channel_str = f"<#{channel_id}>" if channel_id and str(channel_id).isdigit() else ""
+    replacements = {
+        "{user}":        member.mention,
+        "{username}":    str(member),
+        "{guild}":       member.guild.name if member.guild else "",
+        "{inviter}":     inviter_str,
+        "{count}":       str(inv_total),
+        "(channelid)":   channel_str,
+    }
+    for placeholder, value in replacements.items():
+        text = text.replace(placeholder, value)
+    return text
+
+# ─── ISLAM / BOOST SAVE SHORTCUTS ────────────────────────────────────────────
+
+def save_islam_last_msg(guild_id, msg_id):
+    """Persist the last islam-ping message ID for a guild."""
+    islam_last_msg_map[str(guild_id)] = msg_id
+    _save_all()
+
+def save_boost_channel(guild_id, channel_id):
+    """Persist the boost-celebration channel for a guild."""
+    boost_channels[str(guild_id)] = channel_id
+    _save_all()
+
+# ─── END OF MISSING DEFINITIONS ──────────────────────────────────────────────
+
+
 # --- UTILITY FUNCTIONS ---
 
 def fmt_uptime(seconds):
