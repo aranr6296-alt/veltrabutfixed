@@ -83,8 +83,7 @@ def get_guild_lang(guild_id) -> str:
     return guild_langs.get(str(guild_id), "both")
 
 def load_guild_langs():
-def load_guild_langs():
-      pass  # loaded via _load_all()
+    pass  # loaded via _load_all()
     
 
 
@@ -94,187 +93,186 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 import re as _re_pg  # used inside wrapper
 
-def _pg_adapt_sql(sql: str) -> str:
 # ─────────────────────────────────────────────────────────────────────
-    #  JSON-BASED PERSISTENCE  (replaces PostgreSQL / psycopg2)
-    # ─────────────────────────────────────────────────────────────────────
-    _DATA_FILE = "bot_data.json"
+#  JSON-BASED PERSISTENCE  (replaces PostgreSQL / psycopg2)
+# ─────────────────────────────────────────────────────────────────────
+_DATA_FILE = "bot_data.json"
 
-    def _load_all():
-      """Load everything from bot_data.json into the global dicts."""
-      global xp_data, warnings_data, economy, afk_users, level_channels
-      global welcome_channels, welcome_embed_settings, invite_channels
-      global invite_data, invite_counts, apply_channels, apply_questions_map
-      global apply_lang_map, log_channels, anti_link_guilds
-      global antilink_channels_map, antiswear_guilds, antiswear_words_map
-      global antiswear_channels_map, autoreact_emojis_map
-      global autoreact_channels_map_ar, antiemoji_guilds, antiemoji_emojis_map
-      global antiemoji_channels_map, afk_go_text_map, staff_daily_text_map
-      global staff_daily_channels, staff_daily_roles_map, level_enabled
-      global ticket_settings, open_tickets_map, staff_submit_log_channels
-      global rules_settings, staff_daily_last_msg, islam_settings_map
-      global islam_last_msg_map, staff_done_text_map, ticket_panel_text_map
-      global verify_settings_map, eventspeed_settings_map, tags_data
-      global rr_data, selfrole_map, guild_langs
-      global autorole_settings_map, link_settings_map
-      global lucky_leaderboard_data, trivia_scores_data
-      global staff_warnings_db, boost_channels
-      global reklam_settings_map, perk_settings_map
-      global done_log_channels_map, staff_done_role_map, staff_done_log
-      global invite_custom_text_map
-      try:
-          with open(_DATA_FILE, "r", encoding="utf-8") as _f:
-              _d = json.load(_f)
-      except (FileNotFoundError, json.JSONDecodeError):
-          _d = {}
+def _load_all():
+  """Load everything from bot_data.json into the global dicts."""
+  global xp_data, warnings_data, economy, afk_users, level_channels
+  global welcome_channels, welcome_embed_settings, invite_channels
+  global invite_data, invite_counts, apply_channels, apply_questions_map
+  global apply_lang_map, log_channels, anti_link_guilds
+  global antilink_channels_map, antiswear_guilds, antiswear_words_map
+  global antiswear_channels_map, autoreact_emojis_map
+  global autoreact_channels_map_ar, antiemoji_guilds, antiemoji_emojis_map
+  global antiemoji_channels_map, afk_go_text_map, staff_daily_text_map
+  global staff_daily_channels, staff_daily_roles_map, level_enabled
+  global ticket_settings, open_tickets_map, staff_submit_log_channels
+  global rules_settings, staff_daily_last_msg, islam_settings_map
+  global islam_last_msg_map, staff_done_text_map, ticket_panel_text_map
+  global verify_settings_map, eventspeed_settings_map, tags_data
+  global rr_data, selfrole_map, guild_langs
+  global autorole_settings_map, link_settings_map
+  global lucky_leaderboard_data, trivia_scores_data
+  global staff_warnings_db, boost_channels
+  global reklam_settings_map, perk_settings_map
+  global done_log_channels_map, staff_done_role_map, staff_done_log
+  global invite_custom_text_map
+  try:
+      with open(_DATA_FILE, "r", encoding="utf-8") as _f:
+          _d = json.load(_f)
+  except (FileNotFoundError, json.JSONDecodeError):
+      _d = {}
 
-      def _gs(key, default=None):
-          return _d.get(key, ({} if default is None else default))
+  def _gs(key, default=None):
+      return _d.get(key, ({} if default is None else default))
 
-      xp_data                   = _gs("xp_data")
-      warnings_data             = _gs("warnings_data")
-      economy                   = _gs("economy")
-      _raw_afk                  = _gs("afk_users")
-      afk_users.clear()
-      for _k, _v in _raw_afk.items():
-          _p = _k.split(":", 1)
-          if len(_p) == 2 and _p[0].isdigit() and _p[1].isdigit():
-              afk_users[(int(_p[0]), int(_p[1]))] = _v
-          else:
-              afk_users[_k] = _v
-      level_channels            = _gs("level_channels")
-      welcome_channels          = _gs("welcome_channels")
-      welcome_embed_settings    = _gs("welcome_embed_settings")
-      invite_channels           = _gs("invite_channels")
-      invite_data               = _gs("invite_data")
-      invite_counts             = _gs("invite_counts")
-      apply_channels            = _gs("apply_channels")
-      apply_questions_map       = _gs("apply_questions_map")
-      apply_lang_map            = _gs("apply_lang_map")
-      log_channels              = _gs("log_channels")
-      anti_link_guilds          = _gs("anti_link_guilds")
-      antilink_channels_map     = {k: set(v) for k, v in _gs("antilink_channels_map").items()}
-      antiswear_guilds          = _gs("antiswear_guilds")
-      antiswear_words_map       = {k: set(v) for k, v in _gs("antiswear_words_map").items()}
-      antiswear_channels_map    = {k: set(v) for k, v in _gs("antiswear_channels_map").items()}
-      autoreact_emojis_map      = _gs("autoreact_emojis_map")
-      autoreact_channels_map_ar = {k: set(v) for k, v in _gs("autoreact_channels_map_ar").items()}
-      antiemoji_guilds          = _gs("antiemoji_guilds")
-      antiemoji_emojis_map      = {k: set(v) for k, v in _gs("antiemoji_emojis_map").items()}
-      antiemoji_channels_map    = {k: set(v) for k, v in _gs("antiemoji_channels_map").items()}
-      afk_go_text_map           = _gs("afk_go_text_map")
-      staff_daily_text_map      = _gs("staff_daily_text_map")
-      staff_daily_channels      = _gs("staff_daily_channels")
-      staff_daily_roles_map     = _gs("staff_daily_roles_map")
-      level_enabled             = _gs("level_enabled")
-      ticket_settings           = _gs("ticket_settings")
-      open_tickets_map          = _gs("open_tickets_map")
-      staff_submit_log_channels = _gs("staff_submit_log_channels")
-      rules_settings            = _gs("rules_settings")
-      staff_daily_last_msg      = _gs("staff_daily_last_msg")
-      islam_settings_map        = _gs("islam_settings_map")
-      islam_last_msg_map        = _gs("islam_last_msg_map")
-      staff_done_text_map       = _gs("staff_done_text_map")
-      ticket_panel_text_map     = _gs("ticket_panel_text_map")
-      verify_settings_map       = _gs("verify_settings_map")
-      eventspeed_settings_map   = _gs("eventspeed_settings_map")
-      tags_data                 = _gs("tags_data")
-      _raw_rr = _gs("rr_data")
-      rr_data.clear()
-      for _k, _v in _raw_rr.items():
-          rr_data[int(_k)] = [tuple(_x) for _x in _v]
-      _raw_sr = _gs("selfrole_map")
-      selfrole_map.clear()
-      for _k, _v in _raw_sr.items():
-          selfrole_map[int(_k)] = _v
-      guild_langs               = _gs("guild_langs")
-      autorole_settings_map     = {int(k): int(v) for k, v in _gs("autorole_settings_map").items()}
-      link_settings_map         = _gs("link_settings_map")
-      lucky_leaderboard_data    = _gs("lucky_leaderboard_data")
-      trivia_scores_data        = _gs("trivia_scores_data")
-      staff_warnings_db         = _gs("staff_warnings_db")
-      boost_channels            = _gs("boost_channels")
-      reklam_settings_map       = {int(k): v for k, v in _gs("reklam_settings_map").items()}
-      perk_settings_map         = _gs("perk_settings_map")
-      done_log_channels_map     = _gs("done_log_channels_map")
-      staff_done_role_map       = _gs("staff_done_role_map")
-      staff_done_log            = _gs("staff_done_log", [])
-      invite_custom_text_map    = _gs("invite_custom_text_map")
+  xp_data                   = _gs("xp_data")
+  warnings_data             = _gs("warnings_data")
+  economy                   = _gs("economy")
+  _raw_afk                  = _gs("afk_users")
+  afk_users.clear()
+  for _k, _v in _raw_afk.items():
+      _p = _k.split(":", 1)
+      if len(_p) == 2 and _p[0].isdigit() and _p[1].isdigit():
+          afk_users[(int(_p[0]), int(_p[1]))] = _v
+      else:
+          afk_users[_k] = _v
+  level_channels            = _gs("level_channels")
+  welcome_channels          = _gs("welcome_channels")
+  welcome_embed_settings    = _gs("welcome_embed_settings")
+  invite_channels           = _gs("invite_channels")
+  invite_data               = _gs("invite_data")
+  invite_counts             = _gs("invite_counts")
+  apply_channels            = _gs("apply_channels")
+  apply_questions_map       = _gs("apply_questions_map")
+  apply_lang_map            = _gs("apply_lang_map")
+  log_channels              = _gs("log_channels")
+  anti_link_guilds          = _gs("anti_link_guilds")
+  antilink_channels_map     = {k: set(v) for k, v in _gs("antilink_channels_map").items()}
+  antiswear_guilds          = _gs("antiswear_guilds")
+  antiswear_words_map       = {k: set(v) for k, v in _gs("antiswear_words_map").items()}
+  antiswear_channels_map    = {k: set(v) for k, v in _gs("antiswear_channels_map").items()}
+  autoreact_emojis_map      = _gs("autoreact_emojis_map")
+  autoreact_channels_map_ar = {k: set(v) for k, v in _gs("autoreact_channels_map_ar").items()}
+  antiemoji_guilds          = _gs("antiemoji_guilds")
+  antiemoji_emojis_map      = {k: set(v) for k, v in _gs("antiemoji_emojis_map").items()}
+  antiemoji_channels_map    = {k: set(v) for k, v in _gs("antiemoji_channels_map").items()}
+  afk_go_text_map           = _gs("afk_go_text_map")
+  staff_daily_text_map      = _gs("staff_daily_text_map")
+  staff_daily_channels      = _gs("staff_daily_channels")
+  staff_daily_roles_map     = _gs("staff_daily_roles_map")
+  level_enabled             = _gs("level_enabled")
+  ticket_settings           = _gs("ticket_settings")
+  open_tickets_map          = _gs("open_tickets_map")
+  staff_submit_log_channels = _gs("staff_submit_log_channels")
+  rules_settings            = _gs("rules_settings")
+  staff_daily_last_msg      = _gs("staff_daily_last_msg")
+  islam_settings_map        = _gs("islam_settings_map")
+  islam_last_msg_map        = _gs("islam_last_msg_map")
+  staff_done_text_map       = _gs("staff_done_text_map")
+  ticket_panel_text_map     = _gs("ticket_panel_text_map")
+  verify_settings_map       = _gs("verify_settings_map")
+  eventspeed_settings_map   = _gs("eventspeed_settings_map")
+  tags_data                 = _gs("tags_data")
+  _raw_rr = _gs("rr_data")
+  rr_data.clear()
+  for _k, _v in _raw_rr.items():
+      rr_data[int(_k)] = [tuple(_x) for _x in _v]
+  _raw_sr = _gs("selfrole_map")
+  selfrole_map.clear()
+  for _k, _v in _raw_sr.items():
+      selfrole_map[int(_k)] = _v
+  guild_langs               = _gs("guild_langs")
+  autorole_settings_map     = {int(k): int(v) for k, v in _gs("autorole_settings_map").items()}
+  link_settings_map         = _gs("link_settings_map")
+  lucky_leaderboard_data    = _gs("lucky_leaderboard_data")
+  trivia_scores_data        = _gs("trivia_scores_data")
+  staff_warnings_db         = _gs("staff_warnings_db")
+  boost_channels            = _gs("boost_channels")
+  reklam_settings_map       = {int(k): v for k, v in _gs("reklam_settings_map").items()}
+  perk_settings_map         = _gs("perk_settings_map")
+  done_log_channels_map     = _gs("done_log_channels_map")
+  staff_done_role_map       = _gs("staff_done_role_map")
+  staff_done_log            = _gs("staff_done_log", [])
+  invite_custom_text_map    = _gs("invite_custom_text_map")
 
 
-    def _save_all():
-      """Persist all global data to bot_data.json atomically."""
-      def _s2l(d):
-          return {k: list(v) for k, v in d.items()}
+def _save_all():
+  """Persist all global data to bot_data.json atomically."""
+  def _s2l(d):
+      return {k: list(v) for k, v in d.items()}
 
-      _afk_s = {(f"{k[0]}:{k[1]}" if isinstance(k, tuple) else str(k)): v
-                 for k, v in afk_users.items()}
-      _rr_s  = {str(k): [list(x) for x in v] for k, v in rr_data.items()}
-      _sr_s  = {str(k): v for k, v in selfrole_map.items()}
+  _afk_s = {(f"{k[0]}:{k[1]}" if isinstance(k, tuple) else str(k)): v
+             for k, v in afk_users.items()}
+  _rr_s  = {str(k): [list(x) for x in v] for k, v in rr_data.items()}
+  _sr_s  = {str(k): v for k, v in selfrole_map.items()}
 
-      _payload = {
-          "xp_data":                  xp_data,
-          "warnings_data":            warnings_data,
-          "economy":                  economy,
-          "afk_users":                _afk_s,
-          "level_channels":           level_channels,
-          "welcome_channels":         welcome_channels,
-          "welcome_embed_settings":   welcome_embed_settings,
-          "invite_channels":          invite_channels,
-          "invite_data":              invite_data,
-          "invite_counts":            invite_counts,
-          "apply_channels":           apply_channels,
-          "apply_questions_map":      apply_questions_map,
-          "apply_lang_map":           apply_lang_map,
-          "log_channels":             log_channels,
-          "anti_link_guilds":         anti_link_guilds,
-          "antilink_channels_map":    _s2l(antilink_channels_map),
-          "antiswear_guilds":         antiswear_guilds,
-          "antiswear_words_map":      _s2l(antiswear_words_map),
-          "antiswear_channels_map":   _s2l(antiswear_channels_map),
-          "autoreact_emojis_map":     autoreact_emojis_map,
-          "autoreact_channels_map_ar": _s2l(autoreact_channels_map_ar),
-          "antiemoji_guilds":         antiemoji_guilds,
-          "antiemoji_emojis_map":     _s2l(antiemoji_emojis_map),
-          "antiemoji_channels_map":   _s2l(antiemoji_channels_map),
-          "afk_go_text_map":          afk_go_text_map,
-          "staff_daily_text_map":     staff_daily_text_map,
-          "staff_daily_channels":     staff_daily_channels,
-          "staff_daily_roles_map":    staff_daily_roles_map,
-          "level_enabled":            level_enabled,
-          "ticket_settings":          ticket_settings,
-          "open_tickets_map":         open_tickets_map,
-          "staff_submit_log_channels": staff_submit_log_channels,
-          "rules_settings":           rules_settings,
-          "staff_daily_last_msg":     staff_daily_last_msg,
-          "islam_settings_map":       islam_settings_map,
-          "islam_last_msg_map":       islam_last_msg_map,
-          "staff_done_text_map":      staff_done_text_map,
-          "ticket_panel_text_map":    ticket_panel_text_map,
-          "verify_settings_map":      verify_settings_map,
-          "eventspeed_settings_map":  eventspeed_settings_map,
-          "tags_data":                tags_data,
-          "rr_data":                  _rr_s,
-          "selfrole_map":             _sr_s,
-          "guild_langs":              guild_langs,
-          "autorole_settings_map":    {str(k): v for k, v in autorole_settings_map.items()},
-          "link_settings_map":        link_settings_map,
-          "lucky_leaderboard_data":   lucky_leaderboard_data,
-          "trivia_scores_data":       trivia_scores_data,
-          "staff_warnings_db":        staff_warnings_db,
-          "boost_channels":           boost_channels,
-          "reklam_settings_map":      {str(k): v for k, v in reklam_settings_map.items()},
-          "perk_settings_map":        perk_settings_map,
-          "done_log_channels_map":    done_log_channels_map,
-          "staff_done_role_map":      staff_done_role_map,
-          "staff_done_log":           staff_done_log,
-          "invite_custom_text_map":   invite_custom_text_map,
-      }
-      _tmp = _DATA_FILE + ".tmp"
-      with open(_tmp, "w", encoding="utf-8") as _f:
-          json.dump(_payload, _f, ensure_ascii=False)
-      os.replace(_tmp, _DATA_FILE)
-    
+  _payload = {
+      "xp_data":                  xp_data,
+      "warnings_data":            warnings_data,
+      "economy":                  economy,
+      "afk_users":                _afk_s,
+      "level_channels":           level_channels,
+      "welcome_channels":         welcome_channels,
+      "welcome_embed_settings":   welcome_embed_settings,
+      "invite_channels":          invite_channels,
+      "invite_data":              invite_data,
+      "invite_counts":            invite_counts,
+      "apply_channels":           apply_channels,
+      "apply_questions_map":      apply_questions_map,
+      "apply_lang_map":           apply_lang_map,
+      "log_channels":             log_channels,
+      "anti_link_guilds":         anti_link_guilds,
+      "antilink_channels_map":    _s2l(antilink_channels_map),
+      "antiswear_guilds":         antiswear_guilds,
+      "antiswear_words_map":      _s2l(antiswear_words_map),
+      "antiswear_channels_map":   _s2l(antiswear_channels_map),
+      "autoreact_emojis_map":     autoreact_emojis_map,
+      "autoreact_channels_map_ar": _s2l(autoreact_channels_map_ar),
+      "antiemoji_guilds":         antiemoji_guilds,
+      "antiemoji_emojis_map":     _s2l(antiemoji_emojis_map),
+      "antiemoji_channels_map":   _s2l(antiemoji_channels_map),
+      "afk_go_text_map":          afk_go_text_map,
+      "staff_daily_text_map":     staff_daily_text_map,
+      "staff_daily_channels":     staff_daily_channels,
+      "staff_daily_roles_map":    staff_daily_roles_map,
+      "level_enabled":            level_enabled,
+      "ticket_settings":          ticket_settings,
+      "open_tickets_map":         open_tickets_map,
+      "staff_submit_log_channels": staff_submit_log_channels,
+      "rules_settings":           rules_settings,
+      "staff_daily_last_msg":     staff_daily_last_msg,
+      "islam_settings_map":       islam_settings_map,
+      "islam_last_msg_map":       islam_last_msg_map,
+      "staff_done_text_map":      staff_done_text_map,
+      "ticket_panel_text_map":    ticket_panel_text_map,
+      "verify_settings_map":      verify_settings_map,
+      "eventspeed_settings_map":  eventspeed_settings_map,
+      "tags_data":                tags_data,
+      "rr_data":                  _rr_s,
+      "selfrole_map":             _sr_s,
+      "guild_langs":              guild_langs,
+      "autorole_settings_map":    {str(k): v for k, v in autorole_settings_map.items()},
+      "link_settings_map":        link_settings_map,
+      "lucky_leaderboard_data":   lucky_leaderboard_data,
+      "trivia_scores_data":       trivia_scores_data,
+      "staff_warnings_db":        staff_warnings_db,
+      "boost_channels":           boost_channels,
+      "reklam_settings_map":      {str(k): v for k, v in reklam_settings_map.items()},
+      "perk_settings_map":        perk_settings_map,
+      "done_log_channels_map":    done_log_channels_map,
+      "staff_done_role_map":      staff_done_role_map,
+      "staff_done_log":           staff_done_log,
+      "invite_custom_text_map":   invite_custom_text_map,
+  }
+  _tmp = _DATA_FILE + ".tmp"
+  with open(_tmp, "w", encoding="utf-8") as _f:
+      json.dump(_payload, _f, ensure_ascii=False)
+  os.replace(_tmp, _DATA_FILE)
+
 
 xp_data = {}
 warnings_data = {}
@@ -400,226 +398,226 @@ EIGHT_BALL_RESPONSES = [
 
 # --- DATA ACCESS HELPERS (JSON persistence) ---
 
-    # ── individual save shortcuts ──
-    def save_xp():               _save_all()
-    def save_xp_entry(g, u):     _save_all()
-    def save_warnings():         _save_all()
-    def save_econ():             _save_all()
-    def save_afk():              _save_all()
-    def save_level_channels():   _save_all()
-    def save_welcome_channels(): _save_all()
-    def save_welcome_embed_settings(): _save_all()
-    def save_boost_channels():   _save_all()
-    def save_ticket_settings():  _save_all()
-    def save_invite_channels():  _save_all()
-    def save_invite_counts():    _save_all()
-    def save_apply_channels():   _save_all()
-    def save_apply_questions():  _save_all()
-    def save_apply_lang():       _save_all()
-    def save_log_channels():     _save_all()
-    def save_staff_submit_log_channels(): _save_all()
-    def save_rules_settings():   _save_all()
-    def save_staff_daily_last_msg(): _save_all()
-    def save_tags():             _save_all()
-    def save_staff_daily_channels(): _save_all()
-    def save_islam_settings():   _save_all()
-    def save_afk_go_text():      _save_all()
-    def save_staff_daily_text(): _save_all()
-    def save_antilink_settings(): _save_all()
-    def save_antiswear_settings(): _save_all()
-    def save_autoreact():        _save_all()
-    def save_antiemoji():        _save_all()
-    def save_staff_done_text():  _save_all()
-    def save_ticket_panel_text(): _save_all()
-    def save_verify_settings():  _save_all()
-    def save_eventspeed_settings(): _save_all()
-    def save_open_tickets():     _save_all()
+# ── individual save shortcuts ──
+def save_xp():               _save_all()
+def save_xp_entry(g, u):     _save_all()
+def save_warnings():         _save_all()
+def save_econ():             _save_all()
+def save_afk():              _save_all()
+def save_level_channels():   _save_all()
+def save_welcome_channels(): _save_all()
+def save_welcome_embed_settings(): _save_all()
+def save_boost_channels():   _save_all()
+def save_ticket_settings():  _save_all()
+def save_invite_channels():  _save_all()
+def save_invite_counts():    _save_all()
+def save_apply_channels():   _save_all()
+def save_apply_questions():  _save_all()
+def save_apply_lang():       _save_all()
+def save_log_channels():     _save_all()
+def save_staff_submit_log_channels(): _save_all()
+def save_rules_settings():   _save_all()
+def save_staff_daily_last_msg(): _save_all()
+def save_tags():             _save_all()
+def save_staff_daily_channels(): _save_all()
+def save_islam_settings():   _save_all()
+def save_afk_go_text():      _save_all()
+def save_staff_daily_text(): _save_all()
+def save_antilink_settings(): _save_all()
+def save_antiswear_settings(): _save_all()
+def save_autoreact():        _save_all()
+def save_antiemoji():        _save_all()
+def save_staff_done_text():  _save_all()
+def save_ticket_panel_text(): _save_all()
+def save_verify_settings():  _save_all()
+def save_eventspeed_settings(): _save_all()
+def save_open_tickets():     _save_all()
 
-    # ── load stubs (data already loaded from bot_data.json at startup) ──
-    def load_xp():               pass
-    def load_warnings():         pass
-    def load_econ():             pass
-    def load_level_channels():   pass
-    def load_welcome_channels(): pass
-    def load_welcome_embed_settings(): pass
-    def load_boost_channels():   pass
-    def load_ticket_settings():  pass
-    def load_afk():              pass
-    def load_invite_channels():  pass
-    def load_invite_counts():    pass
-    def load_apply_channels():   pass
-    def load_apply_questions():  pass
-    def load_apply_lang():       pass
-    def load_log_channels():     pass
-    def load_staff_submit_log_channels(): pass
-    def load_rules_settings():   pass
-    def load_staff_daily_last_msg(): pass
-    def load_tags():             pass
-    def load_rr():               pass
-    def load_selfrole():         pass
-    def load_staff_daily_channels(): pass
-    def load_islam_settings():   pass
-    def load_afk_go_text():      pass
-    def load_staff_daily_text(): pass
-    def load_antilink_settings(): pass
-    def load_antiswear_settings(): pass
-    def load_autoreact():        pass
-    def load_antiemoji():        pass
-    def load_staff_done_text():  pass
-    def load_ticket_panel_text(): pass
-    def load_verify_settings():  pass
-    def load_eventspeed_settings(): pass
+# ── load stubs (data already loaded from bot_data.json at startup) ──
+def load_xp():               pass
+def load_warnings():         pass
+def load_econ():             pass
+def load_level_channels():   pass
+def load_welcome_channels(): pass
+def load_welcome_embed_settings(): pass
+def load_boost_channels():   pass
+def load_ticket_settings():  pass
+def load_afk():              pass
+def load_invite_channels():  pass
+def load_invite_counts():    pass
+def load_apply_channels():   pass
+def load_apply_questions():  pass
+def load_apply_lang():       pass
+def load_log_channels():     pass
+def load_staff_submit_log_channels(): pass
+def load_rules_settings():   pass
+def load_staff_daily_last_msg(): pass
+def load_tags():             pass
+def load_rr():               pass
+def load_selfrole():         pass
+def load_staff_daily_channels(): pass
+def load_islam_settings():   pass
+def load_afk_go_text():      pass
+def load_staff_daily_text(): pass
+def load_antilink_settings(): pass
+def load_antiswear_settings(): pass
+def load_autoreact():        pass
+def load_antiemoji():        pass
+def load_staff_done_text():  pass
+def load_ticket_panel_text(): pass
+def load_verify_settings():  pass
+def load_eventspeed_settings(): pass
 
-    # ── antilink helpers ──
-    def toggle_antilink(guild_id: int, enable: bool):
-      anti_link_guilds[str(guild_id)] = enable
+# ── antilink helpers ──
+def toggle_antilink(guild_id: int, enable: bool):
+  anti_link_guilds[str(guild_id)] = enable
+  _save_all()
+
+def add_antilink_channel(guild_id: int, channel_id: int) -> bool:
+  chans = antilink_channels_map.setdefault(str(guild_id), set())
+  if channel_id in chans:
+      return False
+  chans.add(channel_id)
+  _save_all()
+  return True
+
+def remove_antilink_channel(guild_id: int, channel_id: int) -> bool:
+  chans = antilink_channels_map.get(str(guild_id), set())
+  if channel_id not in chans:
+      return False
+  chans.discard(channel_id)
+  _save_all()
+  return True
+
+# ── antiswear helpers ──
+def toggle_antiswear(guild_id: int, enable: bool):
+  antiswear_guilds[str(guild_id)] = enable
+  _save_all()
+
+def set_antiswear_words(guild_id: int, words: set):
+  antiswear_words_map[str(guild_id)] = words
+  _save_all()
+
+def add_antiswear_channel(guild_id: int, channel_id: int) -> bool:
+  chans = antiswear_channels_map.setdefault(str(guild_id), set())
+  if channel_id in chans:
+      return False
+  chans.add(channel_id)
+  _save_all()
+  return True
+
+def remove_antiswear_channel(guild_id: int, channel_id: int) -> bool:
+  chans = antiswear_channels_map.get(str(guild_id), set())
+  if channel_id not in chans:
+      return False
+  chans.discard(channel_id)
+  _save_all()
+  return True
+
+# ── reklam helpers ──
+def get_reklam_settings(guild_id: int):
+  return reklam_settings_map.get(guild_id)
+
+def save_reklam_settings(guild_id: int, channel_id: int, role_id: int):
+  reklam_settings_map.setdefault(guild_id, {})
+  reklam_settings_map[guild_id]["channel_id"] = channel_id
+  reklam_settings_map[guild_id]["role_id"] = role_id
+  _save_all()
+
+def save_reklam_text(guild_id: int, text: str):
+  reklam_settings_map.setdefault(guild_id, {})["text"] = text
+  _save_all()
+
+# ── perk helpers ──
+def get_perk_settings(guild_id):
+  return perk_settings_map.get(guild_id)
+
+def save_perk_settings(guild_id, **kwargs):
+  perk_settings_map.setdefault(guild_id, {}).update(kwargs)
+  _save_all()
+
+def save_perk_description(guild_id, desc):
+  perk_settings_map.setdefault(guild_id, {})["description"] = desc
+  _save_all()
+
+def save_perk_role1(guild_id, role_id):
+  perk_settings_map.setdefault(guild_id, {})["role1_id"] = role_id
+  _save_all()
+
+def save_perk_role2(guild_id, role_id):
+  perk_settings_map.setdefault(guild_id, {})["role2_id"] = role_id
+  _save_all()
+
+# ── done-log / staff-done-role helpers ──
+def get_done_log_channel(guild_id):
+  return done_log_channels_map.get(str(guild_id))
+
+def save_done_log_channel(guild_id, channel_id):
+  done_log_channels_map[str(guild_id)] = channel_id
+  _save_all()
+
+def get_staff_done_role(guild_id):
+  return staff_done_role_map.get(str(guild_id))
+
+def save_staff_done_role(guild_id, role_id):
+  staff_done_role_map[str(guild_id)] = role_id
+  _save_all()
+
+def log_staff_done(guild_id, user_id, count):
+  staff_done_log.append({
+      "guild_id":  guild_id,
+      "user_id":   user_id,
+      "count":     count,
+      "timestamp": int(time.time()),
+  })
+  _save_all()
+
+def get_staff_done_since(guild_id, since_ts):
+  return [e for e in staff_done_log
+          if e["guild_id"] == guild_id and e["timestamp"] >= since_ts]
+
+# ── invite custom-text helpers ──
+def get_invite_custom_text(guild_id):
+  return invite_custom_text_map.get(str(guild_id))
+
+def save_invite_custom_text(guild_id, text):
+  invite_custom_text_map[str(guild_id)] = text
+  _save_all()
+
+# ── RR / selfrole panel helpers ──
+def _save_rr_panel(guild_id, channel_id, message_id, title, description):
+  _save_all()
+
+def _save_rr_button(message_id, role_id, emoji, label):
+  _save_all()
+
+def _delete_rr_button(message_id, role_id):
+  if message_id in rr_data:
+      rr_data[message_id] = [(r, e, l) for r, e, l in rr_data[message_id] if r != role_id]
       _save_all()
 
-    def add_antilink_channel(guild_id: int, channel_id: int) -> bool:
-      chans = antilink_channels_map.setdefault(str(guild_id), set())
-      if channel_id in chans:
-          return False
-      chans.add(channel_id)
-      _save_all()
-      return True
+def _delete_rr_panel(message_id):
+  rr_data.pop(message_id, None)
+  _save_all()
 
-    def remove_antilink_channel(guild_id: int, channel_id: int) -> bool:
-      chans = antilink_channels_map.get(str(guild_id), set())
-      if channel_id not in chans:
-          return False
-      chans.discard(channel_id)
-      _save_all()
-      return True
+def _save_selfrole_panel(guild_id, message_id, channel_id, title):
+  _save_all()
 
-    # ── antiswear helpers ──
-    def toggle_antiswear(guild_id: int, enable: bool):
-      antiswear_guilds[str(guild_id)] = enable
-      _save_all()
+def _save_selfrole_entry(guild_id, message_id, emoji, role_id):
+  selfrole_map.setdefault(message_id, {})[emoji] = role_id
+  _save_all()
 
-    def set_antiswear_words(guild_id: int, words: set):
-      antiswear_words_map[str(guild_id)] = words
-      _save_all()
+def _delete_selfrole_panel(message_id):
+  selfrole_map.pop(message_id, None)
+  _save_all()
 
-    def add_antiswear_channel(guild_id: int, channel_id: int) -> bool:
-      chans = antiswear_channels_map.setdefault(str(guild_id), set())
-      if channel_id in chans:
-          return False
-      chans.add(channel_id)
-      _save_all()
-      return True
+def _get_selfrole_panels(guild_id):
+  panels = {}
+  for mid, entries in selfrole_map.items():
+      panels[mid] = {"channel_id": None, "title": "", "entries": list(entries.items())}
+  return panels
 
-    def remove_antiswear_channel(guild_id: int, channel_id: int) -> bool:
-      chans = antiswear_channels_map.get(str(guild_id), set())
-      if channel_id not in chans:
-          return False
-      chans.discard(channel_id)
-      _save_all()
-      return True
-
-    # ── reklam helpers ──
-    def get_reklam_settings(guild_id: int):
-      return reklam_settings_map.get(guild_id)
-
-    def save_reklam_settings(guild_id: int, channel_id: int, role_id: int):
-      reklam_settings_map.setdefault(guild_id, {})
-      reklam_settings_map[guild_id]["channel_id"] = channel_id
-      reklam_settings_map[guild_id]["role_id"] = role_id
-      _save_all()
-
-    def save_reklam_text(guild_id: int, text: str):
-      reklam_settings_map.setdefault(guild_id, {})["text"] = text
-      _save_all()
-
-    # ── perk helpers ──
-    def get_perk_settings(guild_id):
-      return perk_settings_map.get(guild_id)
-
-    def save_perk_settings(guild_id, **kwargs):
-      perk_settings_map.setdefault(guild_id, {}).update(kwargs)
-      _save_all()
-
-    def save_perk_description(guild_id, desc):
-      perk_settings_map.setdefault(guild_id, {})["description"] = desc
-      _save_all()
-
-    def save_perk_role1(guild_id, role_id):
-      perk_settings_map.setdefault(guild_id, {})["role1_id"] = role_id
-      _save_all()
-
-    def save_perk_role2(guild_id, role_id):
-      perk_settings_map.setdefault(guild_id, {})["role2_id"] = role_id
-      _save_all()
-
-    # ── done-log / staff-done-role helpers ──
-    def get_done_log_channel(guild_id):
-      return done_log_channels_map.get(str(guild_id))
-
-    def save_done_log_channel(guild_id, channel_id):
-      done_log_channels_map[str(guild_id)] = channel_id
-      _save_all()
-
-    def get_staff_done_role(guild_id):
-      return staff_done_role_map.get(str(guild_id))
-
-    def save_staff_done_role(guild_id, role_id):
-      staff_done_role_map[str(guild_id)] = role_id
-      _save_all()
-
-    def log_staff_done(guild_id, user_id, count):
-      staff_done_log.append({
-          "guild_id":  guild_id,
-          "user_id":   user_id,
-          "count":     count,
-          "timestamp": int(time.time()),
-      })
-      _save_all()
-
-    def get_staff_done_since(guild_id, since_ts):
-      return [e for e in staff_done_log
-              if e["guild_id"] == guild_id and e["timestamp"] >= since_ts]
-
-    # ── invite custom-text helpers ──
-    def get_invite_custom_text(guild_id):
-      return invite_custom_text_map.get(str(guild_id))
-
-    def save_invite_custom_text(guild_id, text):
-      invite_custom_text_map[str(guild_id)] = text
-      _save_all()
-
-    # ── RR / selfrole panel helpers ──
-    def _save_rr_panel(guild_id, channel_id, message_id, title, description):
-      _save_all()
-
-    def _save_rr_button(message_id, role_id, emoji, label):
-      _save_all()
-
-    def _delete_rr_button(message_id, role_id):
-      if message_id in rr_data:
-          rr_data[message_id] = [(r, e, l) for r, e, l in rr_data[message_id] if r != role_id]
-          _save_all()
-
-    def _delete_rr_panel(message_id):
-      rr_data.pop(message_id, None)
-      _save_all()
-
-    def _save_selfrole_panel(guild_id, message_id, channel_id, title):
-      _save_all()
-
-    def _save_selfrole_entry(guild_id, message_id, emoji, role_id):
-      selfrole_map.setdefault(message_id, {})[emoji] = role_id
-      _save_all()
-
-    def _delete_selfrole_panel(message_id):
-      selfrole_map.pop(message_id, None)
-      _save_all()
-
-    def _get_selfrole_panels(guild_id):
-      panels = {}
-      for mid, entries in selfrole_map.items():
-          panels[mid] = {"channel_id": None, "title": "", "entries": list(entries.items())}
-      return panels
-
-    def get_econ(gid, uid):
+def get_econ(gid, uid):
     g = economy.setdefault(str(gid), {})
     return g.setdefault(str(uid), {
         "wallet": 0, "bank": 0,
