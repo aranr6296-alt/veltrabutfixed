@@ -9,7 +9,7 @@ import math
 import datetime
 import re
 import asyncio
-
+import sqlite3
 import aiohttp
 import concurrent.futures as _cf
 import html as html_module
@@ -83,196 +83,339 @@ def get_guild_lang(guild_id) -> str:
     return guild_langs.get(str(guild_id), "both")
 
 def load_guild_langs():
-    pass  # loaded via _load_all()
-    
+    global guild_langs
+    guild_langs = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, lang FROM guild_lang_settings"):
+        guild_langs[str(row["guild_id"])] = row["lang"]
+    conn.close()
 
 
-# --- POSTGRESQL DATABASE SETUP ---
-# Set DATABASE_URL in your Railway environment variables.
-DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-import re as _re_pg  # used inside wrapper
+# --- SQLITE DATABASE SETUP ---
+DB_FILE = "bot_data.db"
 
-# ─────────────────────────────────────────────────────────────────────
-#  JSON-BASED PERSISTENCE  (replaces PostgreSQL / psycopg2)
-# ─────────────────────────────────────────────────────────────────────
-_DATA_FILE = "bot_data.json"
+def get_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-def _load_all():
-  """Load everything from bot_data.json into the global dicts."""
-  global xp_data, warnings_data, economy, afk_users, level_channels
-  global welcome_channels, welcome_embed_settings, invite_channels
-  global invite_data, invite_counts, apply_channels, apply_questions_map
-  global apply_lang_map, log_channels, anti_link_guilds
-  global antilink_channels_map, antiswear_guilds, antiswear_words_map
-  global antiswear_channels_map, autoreact_emojis_map
-  global autoreact_channels_map_ar, antiemoji_guilds, antiemoji_emojis_map
-  global antiemoji_channels_map, afk_go_text_map, staff_daily_text_map
-  global staff_daily_channels, staff_daily_roles_map, level_enabled
-  global ticket_settings, open_tickets_map, staff_submit_log_channels
-  global rules_settings, staff_daily_last_msg, islam_settings_map
-  global islam_last_msg_map, staff_done_text_map, ticket_panel_text_map
-  global verify_settings_map, eventspeed_settings_map, tags_data
-  global rr_data, selfrole_map, guild_langs
-  global autorole_settings_map, link_settings_map
-  global lucky_leaderboard_data, trivia_scores_data
-  global staff_warnings_db, boost_channels
-  global reklam_settings_map, perk_settings_map
-  global done_log_channels_map, staff_done_role_map, staff_done_log
-  global invite_custom_text_map
-  try:
-      with open(_DATA_FILE, "r", encoding="utf-8") as _f:
-          _d = json.load(_f)
-  except (FileNotFoundError, json.JSONDecodeError):
-      _d = {}
+def init_db():
+    conn = get_db()
+    c = conn.cursor()
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS xp_data (
+            guild_id INTEGER,
+            user_id INTEGER,
+            message_xp INTEGER DEFAULT 0,
+            voice_xp INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS economy (
+            guild_id INTEGER,
+            user_id INTEGER,
+            wallet INTEGER DEFAULT 0,
+            bank INTEGER DEFAULT 0,
+            last_daily REAL DEFAULT 0,
+            last_weekly REAL DEFAULT 0,
+            last_work REAL DEFAULT 0,
+            last_beg REAL DEFAULT 0,
+            inventory TEXT DEFAULT '[]',
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS warnings (
+            guild_id INTEGER,
+            user_id INTEGER,
+            count INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS afk_users (
+            guild_id INTEGER,
+            user_id INTEGER,
+            reason TEXT,
+            since REAL,
+            old_nick TEXT,
+            image_url TEXT,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS level_channels (
+            guild_id INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS lucky_leaderboard (
+            guild_id INTEGER,
+            user_id INTEGER,
+            wins INTEGER DEFAULT 0,
+            total_guesses INTEGER DEFAULT 0,
+            best_guesses INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS welcome_channels (
+            guild_id INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS ticket_settings (
+            guild_id INTEGER PRIMARY KEY,
+            staff_role_id INTEGER,
+            category_id INTEGER,
+            log_channel_id INTEGER,
+            panel_channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS open_tickets (
+            guild_id INTEGER,
+            user_id INTEGER,
+            channel_id INTEGER,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS open_staff_apps (
+            guild_id INTEGER,
+            user_id INTEGER,
+            channel_id INTEGER,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS staff_submit_log_channels (
+            guild_id INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS rules_settings (
+            guild_id  INTEGER PRIMARY KEY,
+            text_en   TEXT    DEFAULT '',
+            text_ku   TEXT    DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS staff_daily_last_msg (
+            guild_id   INTEGER PRIMARY KEY,
+            message_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS invite_channels (
+            guild_id INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS invite_counts (
+            guild_id INTEGER,
+            user_id INTEGER,
+            total INTEGER DEFAULT 0,
+            left_count INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS apply_channels (
+            guild_id INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS apply_questions (
+            guild_id  INTEGER NOT NULL,
+            slot      INTEGER NOT NULL,
+            question  TEXT    NOT NULL,
+            PRIMARY KEY (guild_id, slot)
+        );
+        CREATE TABLE IF NOT EXISTS apply_lang (
+            guild_id  INTEGER PRIMARY KEY,
+            lang      TEXT    NOT NULL DEFAULT 'both'
+        );
+        CREATE TABLE IF NOT EXISTS log_channels (
+            guild_id INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS rr_panels (
+            guild_id INTEGER,
+            channel_id INTEGER,
+            message_id INTEGER PRIMARY KEY,
+            title TEXT,
+            description TEXT
+        );
+        CREATE TABLE IF NOT EXISTS rr_buttons (
+            message_id INTEGER,
+            role_id INTEGER,
+            emoji TEXT,
+            label TEXT,
+            PRIMARY KEY (message_id, role_id)
+        );
+        CREATE TABLE IF NOT EXISTS selfrole_reactions (
+            guild_id   INTEGER,
+            message_id INTEGER,
+            emoji      TEXT,
+            role_id    INTEGER,
+            PRIMARY KEY (message_id, emoji)
+        );
+        CREATE TABLE IF NOT EXISTS staff_daily_channels (
+            guild_id INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS selfrole_panels (
+            guild_id   INTEGER,
+            message_id INTEGER PRIMARY KEY,
+            channel_id INTEGER,
+            title      TEXT
+        );
+        CREATE TABLE IF NOT EXISTS boost_channels (
+            guild_id   INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS staff_done_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id     INTEGER,
+            user_id      INTEGER,
+            display_name TEXT,
+            done_at      TEXT
+        );
+        CREATE TABLE IF NOT EXISTS staff_done_role (
+            guild_id INTEGER PRIMARY KEY,
+            role_id  INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS reklam_settings (
+            guild_id   INTEGER PRIMARY KEY,
+            channel_id INTEGER,
+            role_id    INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS done_log_channels (
+            guild_id   INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS perk_settings (
+            guild_id          INTEGER PRIMARY KEY,
+            one_boost_role_id INTEGER,
+            two_boost_role_id INTEGER,
+            description       TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS welcome_embed_settings (
+            guild_id       INTEGER PRIMARY KEY,
+            title          TEXT,
+            description    TEXT,
+            color          INTEGER,
+            image_url      TEXT,
+            thumbnail_url  TEXT,
+            invite_text    TEXT,
+            account_text   TEXT,
+            channel_id     TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS autorole_settings (
+            guild_id INTEGER PRIMARY KEY,
+            role_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS link_settings (
+            guild_id INTEGER PRIMARY KEY,
+            label TEXT,
+            url TEXT,
+            alignment TEXT DEFAULT 'left'
+        );
+        CREATE TABLE IF NOT EXISTS tags (
+            guild_id    INTEGER,
+            tag_name    TEXT,
+            response    TEXT    DEFAULT '',
+            created_by  INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, tag_name)
+        );
+        CREATE TABLE IF NOT EXISTS trivia_scores (
+            guild_id INTEGER,
+            user_id INTEGER,
+            score INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS guild_lang_settings (
+            guild_id INTEGER PRIMARY KEY,
+            lang TEXT DEFAULT 'both'
+        );
+        CREATE TABLE IF NOT EXISTS staff_daily_roles (
+            guild_id INTEGER,
+            role_id INTEGER,
+            PRIMARY KEY (guild_id, role_id)
+        );
+        CREATE TABLE IF NOT EXISTS islam_settings (
+            guild_id   INTEGER PRIMARY KEY,
+            channel_id INTEGER,
+            role_id    INTEGER,
+            text_en    TEXT DEFAULT '',
+            text_ku    TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS islam_last_msg (
+            guild_id   INTEGER PRIMARY KEY,
+            message_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS afk_settings (
+            guild_id   INTEGER PRIMARY KEY,
+            go_text    TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS staff_daily_text (
+            guild_id    INTEGER PRIMARY KEY,
+            title       TEXT DEFAULT '',
+            description TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS antiswear_settings (
+            guild_id INTEGER PRIMARY KEY,
+            enabled  INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS antiswear_words (
+            guild_id INTEGER,
+            word     TEXT,
+            PRIMARY KEY (guild_id, word)
+        );
+        CREATE TABLE IF NOT EXISTS antiswear_channels (
+            guild_id   INTEGER,
+            channel_id INTEGER,
+            PRIMARY KEY (guild_id, channel_id)
+        );
+        CREATE TABLE IF NOT EXISTS antilink_settings (
+            guild_id INTEGER PRIMARY KEY,
+            enabled  INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS antilink_channels (
+            guild_id   INTEGER,
+            channel_id INTEGER,
+            PRIMARY KEY (guild_id, channel_id)
+        );
+        CREATE TABLE IF NOT EXISTS staff_done_text (
+            guild_id    INTEGER PRIMARY KEY,
+            title       TEXT DEFAULT '',
+            description TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS ticket_panel_text (
+            guild_id INTEGER PRIMARY KEY,
+            text_en  TEXT DEFAULT '',
+            text_ku  TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS verify_settings (
+            guild_id   INTEGER PRIMARY KEY,
+            role_id    INTEGER,
+            channel_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS eventspeed_settings (
+            guild_id INTEGER PRIMARY KEY,
+            text     TEXT DEFAULT '',
+            role_ids TEXT DEFAULT ''
+        );
+    """)
+    conn.commit()
+    conn.close()
 
-  def _gs(key, default=None):
-      return _d.get(key, ({} if default is None else default))
+init_db()
 
-  xp_data                   = _gs("xp_data")
-  warnings_data             = _gs("warnings_data")
-  economy                   = _gs("economy")
-  _raw_afk                  = _gs("afk_users")
-  afk_users.clear()
-  for _k, _v in _raw_afk.items():
-      _p = _k.split(":", 1)
-      if len(_p) == 2 and _p[0].isdigit() and _p[1].isdigit():
-          afk_users[(int(_p[0]), int(_p[1]))] = _v
-      else:
-          afk_users[_k] = _v
-  level_channels            = _gs("level_channels")
-  welcome_channels          = _gs("welcome_channels")
-  welcome_embed_settings    = _gs("welcome_embed_settings")
-  invite_channels           = _gs("invite_channels")
-  invite_data               = _gs("invite_data")
-  invite_counts             = _gs("invite_counts")
-  apply_channels            = _gs("apply_channels")
-  apply_questions_map       = _gs("apply_questions_map")
-  apply_lang_map            = _gs("apply_lang_map")
-  log_channels              = _gs("log_channels")
-  anti_link_guilds          = _gs("anti_link_guilds")
-  antilink_channels_map     = {k: set(v) for k, v in _gs("antilink_channels_map").items()}
-  antiswear_guilds          = _gs("antiswear_guilds")
-  antiswear_words_map       = {k: set(v) for k, v in _gs("antiswear_words_map").items()}
-  antiswear_channels_map    = {k: set(v) for k, v in _gs("antiswear_channels_map").items()}
-  autoreact_emojis_map      = _gs("autoreact_emojis_map")
-  autoreact_channels_map_ar = {k: set(v) for k, v in _gs("autoreact_channels_map_ar").items()}
-  antiemoji_guilds          = _gs("antiemoji_guilds")
-  antiemoji_emojis_map      = {k: set(v) for k, v in _gs("antiemoji_emojis_map").items()}
-  antiemoji_channels_map    = {k: set(v) for k, v in _gs("antiemoji_channels_map").items()}
-  afk_go_text_map           = _gs("afk_go_text_map")
-  staff_daily_text_map      = _gs("staff_daily_text_map")
-  staff_daily_channels      = _gs("staff_daily_channels")
-  staff_daily_roles_map     = _gs("staff_daily_roles_map")
-  level_enabled             = _gs("level_enabled")
-  ticket_settings           = _gs("ticket_settings")
-  open_tickets_map          = _gs("open_tickets_map")
-  staff_submit_log_channels = _gs("staff_submit_log_channels")
-  rules_settings            = _gs("rules_settings")
-  staff_daily_last_msg      = _gs("staff_daily_last_msg")
-  islam_settings_map        = _gs("islam_settings_map")
-  islam_last_msg_map        = _gs("islam_last_msg_map")
-  staff_done_text_map       = _gs("staff_done_text_map")
-  ticket_panel_text_map     = _gs("ticket_panel_text_map")
-  verify_settings_map       = _gs("verify_settings_map")
-  eventspeed_settings_map   = _gs("eventspeed_settings_map")
-  tags_data                 = _gs("tags_data")
-  _raw_rr = _gs("rr_data")
-  rr_data.clear()
-  for _k, _v in _raw_rr.items():
-      rr_data[int(_k)] = [tuple(_x) for _x in _v]
-  _raw_sr = _gs("selfrole_map")
-  selfrole_map.clear()
-  for _k, _v in _raw_sr.items():
-      selfrole_map[int(_k)] = _v
-  guild_langs               = _gs("guild_langs")
-  autorole_settings_map     = {int(k): int(v) for k, v in _gs("autorole_settings_map").items()}
-  link_settings_map         = _gs("link_settings_map")
-  lucky_leaderboard_data    = _gs("lucky_leaderboard_data")
-  trivia_scores_data        = _gs("trivia_scores_data")
-  staff_warnings_db         = _gs("staff_warnings_db")
-  boost_channels            = _gs("boost_channels")
-  reklam_settings_map       = {int(k): v for k, v in _gs("reklam_settings_map").items()}
-  perk_settings_map         = _gs("perk_settings_map")
-  done_log_channels_map     = _gs("done_log_channels_map")
-  staff_done_role_map       = _gs("staff_done_role_map")
-  staff_done_log            = _gs("staff_done_log", [])
-  invite_custom_text_map    = _gs("invite_custom_text_map")
+# --- Migrate existing DBs: add columns added after initial release ---
+def _migrate_db():
+    conn = get_db()
+    migrations = [
+        "ALTER TABLE welcome_embed_settings ADD COLUMN channel_id TEXT DEFAULT ''",
+        "ALTER TABLE perk_settings ADD COLUMN description TEXT DEFAULT ''",
+        "ALTER TABLE reklam_settings ADD COLUMN text TEXT DEFAULT ''",
+        """CREATE TABLE IF NOT EXISTS invite_custom_text (
+            guild_id INTEGER PRIMARY KEY,
+            text TEXT DEFAULT ''
+        )""",
+        "ALTER TABLE ticket_settings ADD COLUMN panel_message_id TEXT DEFAULT ''",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except Exception:
+            pass   # column already exists — safe to ignore
+    conn.commit()
+    conn.close()
+_migrate_db()
 
+secret_role = "Gamer"
 
-def _save_all():
-  """Persist all global data to bot_data.json atomically."""
-  def _s2l(d):
-      return {k: list(v) for k, v in d.items()}
-
-  _afk_s = {(f"{k[0]}:{k[1]}" if isinstance(k, tuple) else str(k)): v
-             for k, v in afk_users.items()}
-  _rr_s  = {str(k): [list(x) for x in v] for k, v in rr_data.items()}
-  _sr_s  = {str(k): v for k, v in selfrole_map.items()}
-
-  _payload = {
-      "xp_data":                  xp_data,
-      "warnings_data":            warnings_data,
-      "economy":                  economy,
-      "afk_users":                _afk_s,
-      "level_channels":           level_channels,
-      "welcome_channels":         welcome_channels,
-      "welcome_embed_settings":   welcome_embed_settings,
-      "invite_channels":          invite_channels,
-      "invite_data":              invite_data,
-      "invite_counts":            invite_counts,
-      "apply_channels":           apply_channels,
-      "apply_questions_map":      apply_questions_map,
-      "apply_lang_map":           apply_lang_map,
-      "log_channels":             log_channels,
-      "anti_link_guilds":         anti_link_guilds,
-      "antilink_channels_map":    _s2l(antilink_channels_map),
-      "antiswear_guilds":         antiswear_guilds,
-      "antiswear_words_map":      _s2l(antiswear_words_map),
-      "antiswear_channels_map":   _s2l(antiswear_channels_map),
-      "autoreact_emojis_map":     autoreact_emojis_map,
-      "autoreact_channels_map_ar": _s2l(autoreact_channels_map_ar),
-      "antiemoji_guilds":         antiemoji_guilds,
-      "antiemoji_emojis_map":     _s2l(antiemoji_emojis_map),
-      "antiemoji_channels_map":   _s2l(antiemoji_channels_map),
-      "afk_go_text_map":          afk_go_text_map,
-      "staff_daily_text_map":     staff_daily_text_map,
-      "staff_daily_channels":     staff_daily_channels,
-      "staff_daily_roles_map":    staff_daily_roles_map,
-      "level_enabled":            level_enabled,
-      "ticket_settings":          ticket_settings,
-      "open_tickets_map":         open_tickets_map,
-      "staff_submit_log_channels": staff_submit_log_channels,
-      "rules_settings":           rules_settings,
-      "staff_daily_last_msg":     staff_daily_last_msg,
-      "islam_settings_map":       islam_settings_map,
-      "islam_last_msg_map":       islam_last_msg_map,
-      "staff_done_text_map":      staff_done_text_map,
-      "ticket_panel_text_map":    ticket_panel_text_map,
-      "verify_settings_map":      verify_settings_map,
-      "eventspeed_settings_map":  eventspeed_settings_map,
-      "tags_data":                tags_data,
-      "rr_data":                  _rr_s,
-      "selfrole_map":             _sr_s,
-      "guild_langs":              guild_langs,
-      "autorole_settings_map":    {str(k): v for k, v in autorole_settings_map.items()},
-      "link_settings_map":        link_settings_map,
-      "lucky_leaderboard_data":   lucky_leaderboard_data,
-      "trivia_scores_data":       trivia_scores_data,
-      "staff_warnings_db":        staff_warnings_db,
-      "boost_channels":           boost_channels,
-      "reklam_settings_map":      {str(k): v for k, v in reklam_settings_map.items()},
-      "perk_settings_map":        perk_settings_map,
-      "done_log_channels_map":    done_log_channels_map,
-      "staff_done_role_map":      staff_done_role_map,
-      "staff_done_log":           staff_done_log,
-      "invite_custom_text_map":   invite_custom_text_map,
-  }
-  _tmp = _DATA_FILE + ".tmp"
-  with open(_tmp, "w", encoding="utf-8") as _f:
-      json.dump(_payload, _f, ensure_ascii=False)
-  os.replace(_tmp, _DATA_FILE)
-
+MESSAGE_XP_MIN = 15
+MESSAGE_XP_MAX = 25
+MESSAGE_XP_COOLDOWN = 60
+VOICE_XP_PER_MINUTE = 10
 
 xp_data = {}
 warnings_data = {}
@@ -302,16 +445,6 @@ antiswear_guilds = {}  # {guild_id: True/False}  — anti-swear toggle per serve
 antiswear_words_map = {}  # {guild_id: set(word, ...)}  — banned words per server
 antiswear_channels_map = {}  # {guild_id: set(channel_id, ...)}  — channels antiswear is scoped to (empty = all channels)
 _antiswear_regex_cache = {}  # {frozenset(words): compiled regex}  — avoids recompiling every message
-
-# ── AUTO-REACT globals ──────────────────────────────────────────────────────
-autoreact_emojis_map      = {}  # {guild_id_str: list[str]}  — emojis to react with
-autoreact_channels_map_ar = {}  # {guild_id_str: set(channel_id)}  — empty = all channels
-
-# ── ANTI-EMOJI globals ──────────────────────────────────────────────────────
-antiemoji_guilds       = {}  # {guild_id_str: bool}
-antiemoji_emojis_map   = {}  # {guild_id_str: set(str)}  — banned emoji strings
-antiemoji_channels_map = {}  # {guild_id_str: set(channel_id)}
-
 
 
 def _find_banned_word(content: str, banned_words) -> str | None:
@@ -396,226 +529,1098 @@ EIGHT_BALL_RESPONSES = [
     "Very doubtful. | زۆر گومانپێکراوە.",
 ]
 
-# --- DATA ACCESS HELPERS (JSON persistence) ---
+# --- SQLITE LOAD/SAVE FUNCTIONS ---
 
-# ── individual save shortcuts ──
-def save_xp():               _save_all()
-def save_xp_entry(g, u):     _save_all()
-def save_warnings():         _save_all()
-def save_econ():             _save_all()
-def save_afk():              _save_all()
-def save_level_channels():   _save_all()
-def save_welcome_channels(): _save_all()
-def save_welcome_embed_settings(): _save_all()
-def save_boost_channels():   _save_all()
-def save_ticket_settings():  _save_all()
-def save_invite_channels():  _save_all()
-def save_invite_counts():    _save_all()
-def save_apply_channels():   _save_all()
-def save_apply_questions():  _save_all()
-def save_apply_lang():       _save_all()
-def save_log_channels():     _save_all()
-def save_staff_submit_log_channels(): _save_all()
-def save_rules_settings():   _save_all()
-def save_staff_daily_last_msg(): _save_all()
-def save_tags():             _save_all()
-def save_staff_daily_channels(): _save_all()
-def save_islam_settings():   _save_all()
-def save_afk_go_text():      _save_all()
-def save_staff_daily_text(): _save_all()
-def save_antilink_settings(): _save_all()
-def save_antiswear_settings(): _save_all()
-def save_autoreact():        _save_all()
-def save_antiemoji():        _save_all()
-def save_staff_done_text():  _save_all()
-def save_ticket_panel_text(): _save_all()
-def save_verify_settings():  _save_all()
-def save_eventspeed_settings(): _save_all()
-def save_open_tickets():     _save_all()
+def load_xp():
+    global xp_data
+    xp_data = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, user_id, message_xp, voice_xp FROM xp_data"):
+        g = str(row["guild_id"])
+        u = str(row["user_id"])
+        xp_data.setdefault(g, {})[u] = {"message_xp": row["message_xp"], "voice_xp": row["voice_xp"]}
+    conn.close()
 
-# ── load stubs (data already loaded from bot_data.json at startup) ──
-def load_xp():               pass
-def load_warnings():         pass
-def load_econ():             pass
-def load_level_channels():   pass
-def load_welcome_channels(): pass
-def load_welcome_embed_settings(): pass
-def load_boost_channels():   pass
-def load_ticket_settings():  pass
-def load_afk():              pass
-def load_invite_channels():  pass
-def load_invite_counts():    pass
-def load_apply_channels():   pass
-def load_apply_questions():  pass
-def load_apply_lang():       pass
-def load_log_channels():     pass
-def load_staff_submit_log_channels(): pass
-def load_rules_settings():   pass
-def load_staff_daily_last_msg(): pass
-def load_tags():             pass
-def load_rr():               pass
-def load_selfrole():         pass
-def load_staff_daily_channels(): pass
-def load_islam_settings():   pass
-def load_afk_go_text():      pass
-def load_staff_daily_text(): pass
-def load_antilink_settings(): pass
-def load_antiswear_settings(): pass
-def load_autoreact():        pass
-def load_antiemoji():        pass
-def load_staff_done_text():  pass
-def load_ticket_panel_text(): pass
-def load_verify_settings():  pass
-def load_eventspeed_settings(): pass
+def save_xp():
+    conn = get_db()
+    for gid, users in xp_data.items():
+        for uid, entry in users.items():
+            conn.execute(
+                "INSERT INTO xp_data (guild_id, user_id, message_xp, voice_xp) VALUES (?,?,?,?) "
+                "ON CONFLICT(guild_id, user_id) DO UPDATE SET message_xp=excluded.message_xp, voice_xp=excluded.voice_xp",
+                (int(gid), int(uid), entry.get("message_xp", 0), entry.get("voice_xp", 0))
+            )
+    conn.commit()
+    conn.close()
 
-# ── antilink helpers ──
-def toggle_antilink(guild_id: int, enable: bool):
-  anti_link_guilds[str(guild_id)] = enable
-  _save_all()
+def save_xp_entry(guild_id, user_id):
+    entry = xp_data.get(str(guild_id), {}).get(str(user_id), {"message_xp": 0, "voice_xp": 0})
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO xp_data (guild_id, user_id, message_xp, voice_xp) VALUES (?,?,?,?) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET message_xp=excluded.message_xp, voice_xp=excluded.voice_xp",
+        (int(guild_id), int(user_id), entry.get("message_xp", 0), entry.get("voice_xp", 0))
+    )
+    conn.commit()
+    conn.close()
 
-def add_antilink_channel(guild_id: int, channel_id: int) -> bool:
-  chans = antilink_channels_map.setdefault(str(guild_id), set())
-  if channel_id in chans:
-      return False
-  chans.add(channel_id)
-  _save_all()
-  return True
+def load_warnings():
+    global warnings_data
+    warnings_data = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, user_id, count FROM warnings"):
+        g = str(row["guild_id"])
+        u = str(row["user_id"])
+        warnings_data.setdefault(g, {})[u] = row["count"]
+    conn.close()
 
-def remove_antilink_channel(guild_id: int, channel_id: int) -> bool:
-  chans = antilink_channels_map.get(str(guild_id), set())
-  if channel_id not in chans:
-      return False
-  chans.discard(channel_id)
-  _save_all()
-  return True
+def save_warnings():
+    conn = get_db()
+    for gid, users in warnings_data.items():
+        for uid, count in users.items():
+            conn.execute(
+                "INSERT INTO warnings (guild_id, user_id, count) VALUES (?,?,?) "
+                "ON CONFLICT(guild_id, user_id) DO UPDATE SET count=excluded.count",
+                (int(gid), int(uid), count)
+            )
+    conn.commit()
+    conn.close()
 
-# ── antiswear helpers ──
-def toggle_antiswear(guild_id: int, enable: bool):
-  antiswear_guilds[str(guild_id)] = enable
-  _save_all()
+def load_econ():
+    global economy
+    economy = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, user_id, wallet, bank, last_daily, last_weekly, last_work, last_beg, inventory FROM economy"):
+        g = str(row["guild_id"])
+        u = str(row["user_id"])
+        economy.setdefault(g, {})[u] = {
+            "wallet": row["wallet"], "bank": row["bank"],
+            "last_daily": row["last_daily"], "last_weekly": row["last_weekly"],
+            "last_work": row["last_work"], "last_beg": row["last_beg"],
+            "inventory": json.loads(row["inventory"] or "[]"),
+        }
+    conn.close()
 
-def set_antiswear_words(guild_id: int, words: set):
-  antiswear_words_map[str(guild_id)] = words
-  _save_all()
+def save_econ():
+    conn = get_db()
+    for gid, users in economy.items():
+        for uid, e in users.items():
+            conn.execute(
+                "INSERT INTO economy (guild_id, user_id, wallet, bank, last_daily, last_weekly, last_work, last_beg, inventory) "
+                "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+                "wallet=excluded.wallet, bank=excluded.bank, last_daily=excluded.last_daily, "
+                "last_weekly=excluded.last_weekly, last_work=excluded.last_work, last_beg=excluded.last_beg, "
+                "inventory=excluded.inventory",
+                (int(gid), int(uid), e["wallet"], e["bank"], e["last_daily"], e["last_weekly"],
+                 e["last_work"], e["last_beg"], json.dumps(e["inventory"]))
+            )
+    conn.commit()
+    conn.close()
 
-def add_antiswear_channel(guild_id: int, channel_id: int) -> bool:
-  chans = antiswear_channels_map.setdefault(str(guild_id), set())
-  if channel_id in chans:
-      return False
-  chans.add(channel_id)
-  _save_all()
-  return True
+def load_level_channels():
+    global level_channels
+    level_channels = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id FROM level_channels"):
+        level_channels[str(row["guild_id"])] = row["channel_id"]
+    conn.close()
 
-def remove_antiswear_channel(guild_id: int, channel_id: int) -> bool:
-  chans = antiswear_channels_map.get(str(guild_id), set())
-  if channel_id not in chans:
-      return False
-  chans.discard(channel_id)
-  _save_all()
-  return True
+def save_level_channels():
+    conn = get_db()
+    for gid, cid in level_channels.items():
+        conn.execute(
+            "INSERT INTO level_channels (guild_id, channel_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+            (int(gid), int(cid))
+        )
+    conn.commit()
+    conn.close()
 
-# ── reklam helpers ──
+def load_ticket_settings():
+    global ticket_settings, open_tickets_map
+    ticket_settings = {}
+    open_tickets_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, staff_role_id, category_id, log_channel_id, panel_channel_id, panel_message_id FROM ticket_settings"):
+        ticket_settings[str(row["guild_id"])] = {
+            "staff_role_id": row["staff_role_id"],
+            "category_id": row["category_id"],
+            "log_channel_id": row["log_channel_id"],
+            "panel_channel_id": row["panel_channel_id"],
+            "panel_message_id": row["panel_message_id"],
+        }
+    for row in conn.execute("SELECT guild_id, user_id, channel_id FROM open_tickets"):
+        open_tickets_map[(str(row["guild_id"]), str(row["user_id"]))] = row["channel_id"]
+    conn.close()
+
+def save_ticket_settings():
+    conn = get_db()
+    for gid, s in ticket_settings.items():
+        conn.execute(
+            "INSERT INTO ticket_settings (guild_id, staff_role_id, category_id, log_channel_id, panel_channel_id, panel_message_id) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET "
+            "staff_role_id=excluded.staff_role_id, category_id=excluded.category_id, "
+            "log_channel_id=excluded.log_channel_id, panel_channel_id=excluded.panel_channel_id, "
+            "panel_message_id=excluded.panel_message_id",
+            (int(gid), s.get("staff_role_id"), s.get("category_id"), s.get("log_channel_id"),
+             s.get("panel_channel_id"), s.get("panel_message_id"))
+        )
+    conn.commit()
+    conn.close()
+
+def save_open_tickets():
+    conn = get_db()
+    conn.execute("DELETE FROM open_tickets")
+    for (gid, uid), cid in open_tickets_map.items():
+        conn.execute(
+            "INSERT INTO open_tickets (guild_id, user_id, channel_id) VALUES (?,?,?)",
+            (int(gid), int(uid), int(cid))
+        )
+    conn.commit()
+    conn.close()
+
+def load_staff_submit_log_channels():
+    global staff_submit_log_channels, open_staff_apps
+    staff_submit_log_channels = {}
+    open_staff_apps = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id FROM staff_submit_log_channels"):
+        staff_submit_log_channels[str(row["guild_id"])] = row["channel_id"]
+    for row in conn.execute("SELECT guild_id, user_id, channel_id FROM open_staff_apps"):
+        open_staff_apps[(str(row["guild_id"]), str(row["user_id"]))] = row["channel_id"]
+    conn.close()
+
+def save_staff_submit_log_channels():
+    conn = get_db()
+    for gid, cid in staff_submit_log_channels.items():
+        conn.execute(
+            "INSERT INTO staff_submit_log_channels (guild_id, channel_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+            (int(gid), int(cid))
+        )
+    conn.commit()
+    conn.close()
+
+def save_open_staff_apps():
+    conn = get_db()
+    conn.execute("DELETE FROM open_staff_apps")
+    for (gid, uid), cid in open_staff_apps.items():
+        conn.execute(
+            "INSERT INTO open_staff_apps (guild_id, user_id, channel_id) VALUES (?,?,?)",
+            (int(gid), int(uid), int(cid))
+        )
+    conn.commit()
+    conn.close()
+
+def load_rules_settings():
+    global rules_settings
+    rules_settings = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, text_en, text_ku FROM rules_settings"):
+        rules_settings[str(row["guild_id"])] = {
+            "text_en": row["text_en"] or "",
+            "text_ku": row["text_ku"] or "",
+        }
+    conn.close()
+
+def save_rules_settings():
+    conn = get_db()
+    for gid, s in rules_settings.items():
+        conn.execute(
+            "INSERT INTO rules_settings (guild_id, text_en, text_ku) VALUES (?,?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET text_en=excluded.text_en, text_ku=excluded.text_ku",
+            (int(gid), s.get("text_en", ""), s.get("text_ku", ""))
+        )
+    conn.commit()
+    conn.close()
+
+def load_staff_daily_last_msg():
+    global staff_daily_last_msg
+    staff_daily_last_msg = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, message_id FROM staff_daily_last_msg"):
+        staff_daily_last_msg[str(row["guild_id"])] = row["message_id"]
+    conn.close()
+
+def save_staff_daily_last_msg():
+    conn = get_db()
+    for gid, mid in staff_daily_last_msg.items():
+        conn.execute(
+            "INSERT INTO staff_daily_last_msg (guild_id, message_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET message_id=excluded.message_id",
+            (int(gid), int(mid))
+        )
+    conn.commit()
+    conn.close()
+
+def load_tags():
+    global tags_data
+    tags_data = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, tag_name, response, created_by FROM tags"):
+        gid = str(row["guild_id"])
+        tags_data.setdefault(gid, {})[row["tag_name"].lower()] = {
+            "response":   row["response"] or "",
+            "name":       row["tag_name"],
+            "created_by": row["created_by"] or 0,
+        }
+    conn.close()
+
+def save_tag(guild_id: int, tag_name: str, response: str, created_by: int = 0):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO tags (guild_id, tag_name, response, created_by) VALUES (?,?,?,?) "
+        "ON CONFLICT(guild_id, tag_name) DO UPDATE SET "
+        "response=excluded.response, created_by=excluded.created_by",
+        (guild_id, tag_name, response, created_by),
+    )
+    conn.commit()
+    conn.close()
+    gid = str(guild_id)
+    tags_data.setdefault(gid, {})[tag_name.lower()] = {
+        "response":   response,
+        "name":       tag_name,
+        "created_by": created_by,
+    }
+
+def delete_tag(guild_id: int, tag_name: str) -> bool:
+    gid = str(guild_id)
+    key = tag_name.lower()
+    if key not in tags_data.get(gid, {}):
+        return False
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM tags WHERE guild_id=? AND LOWER(tag_name)=LOWER(?)", (guild_id, tag_name)
+    )
+    conn.commit()
+    conn.close()
+    tags_data.get(gid, {}).pop(key, None)
+    return True
+
+
+def get_ticket_cfg(guild_id):
+    return ticket_settings.get(str(guild_id), {})
+
+async def ticket_log(guild, message):
+    cfg = get_ticket_cfg(guild.id)
+    log_cid = cfg.get("log_channel_id")
+    if not log_cid:
+        return
+    ch = guild.get_channel(int(log_cid))
+    if ch:
+        embed = discord.Embed(color=0x5865f2, description=message, timestamp=datetime.datetime.utcnow())
+        try:
+            await ch.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+def load_welcome_channels():
+    global welcome_channels
+    welcome_channels = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id FROM welcome_channels"):
+        welcome_channels[str(row["guild_id"])] = row["channel_id"]
+    conn.close()
+
+def save_welcome_channels():
+    conn = get_db()
+    for gid, cid in welcome_channels.items():
+        conn.execute(
+            "INSERT INTO welcome_channels (guild_id, channel_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+            (int(gid), int(cid))
+        )
+    conn.commit()
+    conn.close()
+
+# --- WELCOME EMBED SETTINGS PERSISTENCE ---
+_WES_DEFAULTS = {
+    "title":        "☀️ بەخێرهاتی بۆ (server)! | Welcome to (server)!",
+    "description":  "👋 هەی (user)، بەخێربێیت! ✨\n🌟 هیوادارم کاتێکی خۆش لەگەڵمان بژیت! 🎉\n\n👋 Hey (user), welcome! ✨\n🌟 I hope you'll have a great time with us! 🎉",
+    "color":        0xFFD700,
+    "image_url":    "",
+    "thumbnail_url": "avatar",
+    "invite_text":  "🔗 Invited by: (invite.user) | Total invites: (invite.count)",
+    "account_text": "📅 Account created: (account.age)",
+    "channel_id":    "",
+}
+
+def get_welcome_embed_settings(guild_id):
+    gid = str(guild_id)
+    if gid not in welcome_embed_settings:
+        welcome_embed_settings[gid] = dict(_WES_DEFAULTS)
+    return welcome_embed_settings[gid]
+
+def save_welcome_embed_setting(guild_id, **kwargs):
+    gid = str(guild_id)
+    if gid not in welcome_embed_settings:
+        welcome_embed_settings[gid] = dict(_WES_DEFAULTS)
+    welcome_embed_settings[gid].update(kwargs)
+    s = welcome_embed_settings[gid]
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO welcome_embed_settings "
+        "(guild_id,title,description,color,image_url,thumbnail_url,invite_text,account_text,channel_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET "
+        "title=excluded.title, description=excluded.description, color=excluded.color, "
+        "image_url=excluded.image_url, thumbnail_url=excluded.thumbnail_url, "
+        "invite_text=excluded.invite_text, account_text=excluded.account_text, channel_id=excluded.channel_id",
+        (int(guild_id), s["title"], s["description"], s["color"],
+         s["image_url"], s["thumbnail_url"], s["invite_text"], s["account_text"], s.get("channel_id","")))
+    conn.commit()
+    conn.close()
+
+def load_welcome_embed_settings():
+    global welcome_embed_settings
+    welcome_embed_settings = {}
+    conn = get_db()
+    for row in conn.execute("SELECT * FROM welcome_embed_settings"):
+        welcome_embed_settings[str(row["guild_id"])] = {
+            "title":        row["title"]        or _WES_DEFAULTS["title"],
+            "description":  row["description"]  or _WES_DEFAULTS["description"],
+            "color":        row["color"]        or _WES_DEFAULTS["color"],
+            "image_url":    row["image_url"]    or "",
+            "thumbnail_url":row["thumbnail_url"] or "avatar",
+            "invite_text":  row["invite_text"]  or _WES_DEFAULTS["invite_text"],
+            "account_text": row["account_text"] or _WES_DEFAULTS["account_text"],
+            "account_text": row["account_text"] or _WES_DEFAULTS["account_text"],
+            "channel_id":   row["channel_id"]   if "channel_id" in row.keys() else "",
+        }
+def apply_welcome_placeholders(text, member, inviter=None, inv_total=0, channel_id=""):
+    """Replace (user), (server), (invite.user), (invite.count), (account.age) etc."""
+    if not text:
+        return text
+    account_created = member.created_at
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    diff_days = (now - account_created).days
+    if diff_days >= 365:
+        age_str = f"{diff_days // 365} year{'s' if diff_days//365 != 1 else ''} ago"
+    elif diff_days >= 30:
+        months = diff_days // 30
+        age_str = f"{months} month{'s' if months != 1 else ''} ago"
+    else:
+        age_str = f"{diff_days} day{'s' if diff_days != 1 else ''} ago"
+
+    text = text.replace("(user)", member.mention)
+    text = text.replace("(user.name)", member.display_name)
+    text = text.replace("(server)", member.guild.name)
+    text = text.replace("(member.count)", f"{member.guild.member_count:,}")
+    text = text.replace("(invite.user)", inviter.mention if inviter else "Unknown")
+    text = text.replace("(invite.user.name)", inviter.display_name if inviter else "Unknown")
+    text = text.replace("(invite.count)", str(inv_total))
+    text = text.replace("(account.age)", age_str)
+    text = text.replace("(channelid)", f"<#{channel_id}>" if channel_id else "(channelid)")
+    return text
+
+# --- INVITE TRACKING PERSISTENCE ---
+def load_invite_channels():
+    global invite_channels
+    invite_channels = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id FROM invite_channels"):
+        invite_channels[str(row["guild_id"])] = row["channel_id"]
+    conn.close()
+
+def save_invite_channels():
+    conn = get_db()
+    for gid, cid in invite_channels.items():
+        conn.execute(
+            "INSERT INTO invite_channels (guild_id, channel_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+            (int(gid), int(cid))
+        )
+    conn.commit()
+    conn.close()
+
+def load_invite_counts():
+    global invite_counts
+    invite_counts = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, user_id, total, left_count FROM invite_counts"):
+        g = invite_counts.setdefault(str(row["guild_id"]), {})
+        g[str(row["user_id"])] = {"total": row["total"], "left": row["left_count"]}
+    conn.close()
+
+def save_invite_counts():
+    conn = get_db()
+    for gid, users in invite_counts.items():
+        for uid, d in users.items():
+            conn.execute(
+                "INSERT INTO invite_counts (guild_id, user_id, total, left_count) VALUES (?,?,?,?) "
+                "ON CONFLICT(guild_id, user_id) DO UPDATE SET total=excluded.total, left_count=excluded.left_count",
+                (int(gid), int(uid), d.get("total", 0), d.get("left", 0))
+            )
+    conn.commit()
+    conn.close()
+
+def _get_invite_counts(gid, uid):
+    return invite_counts.setdefault(str(gid), {}).setdefault(str(uid), {"total": 0, "left": 0})
+
+def load_apply_channels():
+    global apply_channels
+    apply_channels = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id FROM apply_channels"):
+        apply_channels[str(row["guild_id"])] = row["channel_id"]
+    conn.close()
+
+def save_apply_channels():
+    conn = get_db()
+    for gid, cid in apply_channels.items():
+        conn.execute(
+            "INSERT INTO apply_channels (guild_id, channel_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+            (int(gid), int(cid))
+        )
+    conn.commit()
+    conn.close()
+
+boost_channels = {}
+
+def load_boost_channels():
+    global boost_channels
+    boost_channels = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id FROM boost_channels"):
+        boost_channels[str(row["guild_id"])] = row["channel_id"]
+    conn.close()
+
+def save_boost_channel(guild_id, channel_id):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO boost_channels (guild_id, channel_id) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+        (int(guild_id), int(channel_id))
+    )
+    conn.commit()
+    conn.close()
+
+def get_perk_settings(guild_id: int):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM perk_settings WHERE guild_id=?",
+        (int(guild_id),)
+    ).fetchone()
+    conn.close()
+    if row:
+        keys = row.keys()
+        return {
+            "one_boost_role_id": row["one_boost_role_id"],
+            "two_boost_role_id": row["two_boost_role_id"],
+            "description": row["description"] if "description" in keys else "",
+        }
+    return None
+
+def save_perk_settings(guild_id: int, one_boost_role_id: int, two_boost_role_id: int):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO perk_settings (guild_id, one_boost_role_id, two_boost_role_id) VALUES (?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET one_boost_role_id=excluded.one_boost_role_id, two_boost_role_id=excluded.two_boost_role_id",
+        (int(guild_id), int(one_boost_role_id), int(two_boost_role_id))
+    )
+    conn.commit()
+    conn.close()
+
+def save_perk_description(guild_id: int, description: str):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO perk_settings (guild_id, description) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET description=excluded.description",
+        (int(guild_id), description)
+    )
+    conn.commit()
+    conn.close()
+
+def save_perk_role1(guild_id: int, role_id: int):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO perk_settings (guild_id, one_boost_role_id) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET one_boost_role_id=excluded.one_boost_role_id",
+        (int(guild_id), int(role_id))
+    )
+    conn.commit()
+    conn.close()
+
+def save_perk_role2(guild_id: int, role_id: int):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO perk_settings (guild_id, two_boost_role_id) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET two_boost_role_id=excluded.two_boost_role_id",
+        (int(guild_id), int(role_id))
+    )
+    conn.commit()
+    conn.close()
+
+def load_log_channels():
+    global log_channels
+    log_channels = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id FROM log_channels"):
+        log_channels[str(row["guild_id"])] = row["channel_id"]
+    conn.close()
+
+def save_log_channels():
+    conn = get_db()
+    for gid, cid in log_channels.items():
+        conn.execute(
+            "INSERT INTO log_channels (guild_id, channel_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+            (int(gid), int(cid))
+        )
+    conn.commit()
+    conn.close()
+
+def load_staff_daily_channels():
+    global staff_daily_channels
+    staff_daily_channels = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id FROM staff_daily_channels"):
+        staff_daily_channels[str(row["guild_id"])] = row["channel_id"]
+    conn.close()
+
+def save_staff_daily_channels():
+    conn = get_db()
+    for gid, cid in staff_daily_channels.items():
+        conn.execute(
+            "INSERT INTO staff_daily_channels (guild_id, channel_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+            (int(gid), int(cid))
+        )
+    conn.commit()
+    conn.close()
+
+def load_staff_daily_roles():
+    global staff_daily_roles_map
+    staff_daily_roles_map = {}
+    conn = get_db()
+    for row in conn.execute('SELECT guild_id, role_id FROM staff_daily_roles'):
+        g = str(row['guild_id'])
+        staff_daily_roles_map.setdefault(g, []).append(row['role_id'])
+    conn.close()
+
+def save_staff_daily_roles(guild_id: str, role_ids: list):
+    conn = get_db()
+    conn.execute('DELETE FROM staff_daily_roles WHERE guild_id=?', (int(guild_id),))
+    for rid in role_ids:
+        conn.execute('INSERT OR IGNORE INTO staff_daily_roles (guild_id, role_id) VALUES (?,?)', (int(guild_id), int(rid)))
+    conn.commit()
+    conn.close()
+    staff_daily_roles_map[guild_id] = list(role_ids)
+
+def load_islam_settings():
+    global islam_settings_map, islam_last_msg_map
+    islam_settings_map = {}
+    islam_last_msg_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id, role_id, text_en, text_ku FROM islam_settings"):
+        islam_settings_map[str(row["guild_id"])] = {
+            "channel_id": row["channel_id"],
+            "role_id":    row["role_id"],
+            "text_en":    row["text_en"] or "",
+            "text_ku":    row["text_ku"] or "",
+        }
+    for row in conn.execute("SELECT guild_id, message_id FROM islam_last_msg"):
+        islam_last_msg_map[str(row["guild_id"])] = row["message_id"]
+    conn.close()
+
+def save_islam_settings(guild_id, channel_id=None, role_id=None, text_en=None, text_ku=None):
+    gid = str(guild_id)
+    cur = islam_settings_map.setdefault(gid, {"channel_id": None, "role_id": None, "text_en": "", "text_ku": ""})
+    if channel_id is not None: cur["channel_id"] = channel_id
+    if role_id    is not None: cur["role_id"]    = role_id
+    if text_en    is not None: cur["text_en"]    = text_en
+    if text_ku    is not None: cur["text_ku"]    = text_ku
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO islam_settings (guild_id, channel_id, role_id, text_en, text_ku) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id, role_id=excluded.role_id, "
+        "text_en=excluded.text_en, text_ku=excluded.text_ku",
+        (int(guild_id), cur["channel_id"], cur["role_id"], cur["text_en"], cur["text_ku"])
+    )
+    conn.commit()
+    conn.close()
+
+def save_islam_last_msg(guild_id, message_id):
+    gid = str(guild_id)
+    islam_last_msg_map[gid] = message_id
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO islam_last_msg (guild_id, message_id) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET message_id=excluded.message_id",
+        (int(guild_id), int(message_id))
+    )
+    conn.commit()
+    conn.close()
+
+def load_apply_questions():
+    global apply_questions_map
+    apply_questions_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, slot, question FROM apply_questions ORDER BY guild_id, slot"):
+        apply_questions_map.setdefault(str(row["guild_id"]), []).append(row["question"])
+    conn.close()
+
+def save_apply_questions(guild_id: int, questions: list):
+    apply_questions_map[str(guild_id)] = questions
+    conn = get_db()
+    conn.execute("DELETE FROM apply_questions WHERE guild_id=?", (guild_id,))
+    for i, q in enumerate(questions[:5], start=1):
+        conn.execute("INSERT INTO apply_questions (guild_id, slot, question) VALUES (?,?,?)", (guild_id, i, q))
+    conn.commit()
+    conn.close()
+
+def load_apply_lang():
+    global apply_lang_map
+    apply_lang_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, lang FROM apply_lang"):
+        apply_lang_map[str(row["guild_id"])] = row["lang"]
+    conn.close()
+
+def save_apply_lang(guild_id: int, lang: str):
+    apply_lang_map[str(guild_id)] = lang
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO apply_lang (guild_id, lang) VALUES (?,?) ON CONFLICT(guild_id) DO UPDATE SET lang=excluded.lang",
+        (guild_id, lang)
+    )
+    conn.commit()
+    conn.close()
+
+
+
+
+def log_staff_done(guild_id: int, user_id: int, display_name: str):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO staff_done_log (guild_id, user_id, display_name, done_at) VALUES (?,?,?,?)",
+        (guild_id, user_id, display_name, datetime.datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_staff_done_since(guild_id: int, since_iso: str):
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT user_id, display_name, done_at FROM staff_done_log "
+        "WHERE guild_id=? AND done_at>=? ORDER BY done_at ASC",
+        (guild_id, since_iso)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_staff_done_role(guild_id: int):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT role_id FROM staff_done_role WHERE guild_id=?", (guild_id,)
+    ).fetchone()
+    conn.close()
+    return row["role_id"] if row else None
+
+
+def save_staff_done_role(guild_id: int, role_id: int):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO staff_done_role (guild_id, role_id) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET role_id=excluded.role_id",
+        (guild_id, role_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_done_log_channel(guild_id: int):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT channel_id FROM done_log_channels WHERE guild_id=?", (guild_id,)
+    ).fetchone()
+    conn.close()
+    return row["channel_id"] if row else None
+
+def save_done_log_channel(guild_id: int, channel_id: int):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO done_log_channels (guild_id, channel_id) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+        (guild_id, channel_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_reklam_settings(guild_id: int):
-  return reklam_settings_map.get(guild_id)
+    conn = get_db()
+    row = conn.execute(
+        "SELECT channel_id, role_id, text FROM reklam_settings WHERE guild_id=?", (guild_id,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return {"channel_id": row["channel_id"], "role_id": row["role_id"], "text": row["text"] or ""}
+    return None
+
 
 def save_reklam_settings(guild_id: int, channel_id: int, role_id: int):
-  reklam_settings_map.setdefault(guild_id, {})
-  reklam_settings_map[guild_id]["channel_id"] = channel_id
-  reklam_settings_map[guild_id]["role_id"] = role_id
-  _save_all()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO reklam_settings (guild_id, channel_id, role_id) VALUES (?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id, role_id=excluded.role_id",
+        (guild_id, channel_id, role_id)
+    )
+    conn.commit()
+    conn.close()
+
 
 def save_reklam_text(guild_id: int, text: str):
-  reklam_settings_map.setdefault(guild_id, {})["text"] = text
-  _save_all()
+    """Save custom reklam notification text (supports {user} placeholder)."""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO reklam_settings (guild_id, text) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET text=excluded.text",
+        (guild_id, text)
+    )
+    conn.commit()
+    conn.close()
 
-# ── perk helpers ──
-def get_perk_settings(guild_id):
-  return perk_settings_map.get(guild_id)
 
-def save_perk_settings(guild_id, **kwargs):
-  perk_settings_map.setdefault(guild_id, {}).update(kwargs)
-  _save_all()
+def get_invite_custom_text(guild_id: int) -> str:
+    """Get custom invite announcement text for this guild."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT text FROM invite_custom_text WHERE guild_id=?", (guild_id,)
+    ).fetchone()
+    conn.close()
+    return row["text"] if row else ""
 
-def save_perk_description(guild_id, desc):
-  perk_settings_map.setdefault(guild_id, {})["description"] = desc
-  _save_all()
 
-def save_perk_role1(guild_id, role_id):
-  perk_settings_map.setdefault(guild_id, {})["role1_id"] = role_id
-  _save_all()
+def save_invite_custom_text(guild_id: int, text: str):
+    """Save custom invite announcement text for this guild."""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO invite_custom_text (guild_id, text) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET text=excluded.text",
+        (guild_id, text)
+    )
+    conn.commit()
+    conn.close()
 
-def save_perk_role2(guild_id, role_id):
-  perk_settings_map.setdefault(guild_id, {})["role2_id"] = role_id
-  _save_all()
+def load_rr():
+    global rr_data
+    rr_data = {}
+    conn = get_db()
+    for row in conn.execute("SELECT message_id, role_id, emoji, label FROM rr_buttons"):
+        rr_data.setdefault(row["message_id"], []).append(
+            (row["role_id"], row["emoji"], row["label"])
+        )
+    conn.close()
 
-# ── done-log / staff-done-role helpers ──
-def get_done_log_channel(guild_id):
-  return done_log_channels_map.get(str(guild_id))
-
-def save_done_log_channel(guild_id, channel_id):
-  done_log_channels_map[str(guild_id)] = channel_id
-  _save_all()
-
-def get_staff_done_role(guild_id):
-  return staff_done_role_map.get(str(guild_id))
-
-def save_staff_done_role(guild_id, role_id):
-  staff_done_role_map[str(guild_id)] = role_id
-  _save_all()
-
-def log_staff_done(guild_id, user_id, count):
-  staff_done_log.append({
-      "guild_id":  guild_id,
-      "user_id":   user_id,
-      "count":     count,
-      "timestamp": int(time.time()),
-  })
-  _save_all()
-
-def get_staff_done_since(guild_id, since_ts):
-  return [e for e in staff_done_log
-          if e["guild_id"] == guild_id and e["timestamp"] >= since_ts]
-
-# ── invite custom-text helpers ──
-def get_invite_custom_text(guild_id):
-  return invite_custom_text_map.get(str(guild_id))
-
-def save_invite_custom_text(guild_id, text):
-  invite_custom_text_map[str(guild_id)] = text
-  _save_all()
-
-# ── RR / selfrole panel helpers ──
 def _save_rr_panel(guild_id, channel_id, message_id, title, description):
-  _save_all()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO rr_panels (guild_id, channel_id, message_id, title, description) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(message_id) DO UPDATE SET title=excluded.title, description=excluded.description",
+        (guild_id, channel_id, message_id, title, description)
+    )
+    conn.commit()
+    conn.close()
 
 def _save_rr_button(message_id, role_id, emoji, label):
-  _save_all()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO rr_buttons (message_id, role_id, emoji, label) VALUES (?,?,?,?) "
+        "ON CONFLICT(message_id, role_id) DO UPDATE SET emoji=excluded.emoji, label=excluded.label",
+        (message_id, role_id, emoji, label)
+    )
+    conn.commit()
+    conn.close()
 
 def _delete_rr_button(message_id, role_id):
-  if message_id in rr_data:
-      rr_data[message_id] = [(r, e, l) for r, e, l in rr_data[message_id] if r != role_id]
-      _save_all()
+    conn = get_db()
+    conn.execute("DELETE FROM rr_buttons WHERE message_id=? AND role_id=?", (message_id, role_id))
+    conn.commit()
+    conn.close()
 
 def _delete_rr_panel(message_id):
-  rr_data.pop(message_id, None)
-  _save_all()
+    conn = get_db()
+    conn.execute("DELETE FROM rr_buttons WHERE message_id=?", (message_id,))
+    conn.execute("DELETE FROM rr_panels  WHERE message_id=?", (message_id,))
+    conn.commit()
+    conn.close()
 
-def _save_selfrole_panel(guild_id, message_id, channel_id, title):
-  _save_all()
+async def _send_log(guild, embed):
+    """Send an embed to the configured log channel, if set."""
+    cid = log_channels.get(str(guild.id))
+    if not cid:
+        return
+    ch = guild.get_channel(int(cid))
+    if ch:
+        try:
+            await ch.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
-def _save_selfrole_entry(guild_id, message_id, emoji, role_id):
-  selfrole_map.setdefault(message_id, {})[emoji] = role_id
-  _save_all()
+def load_afk():
+    global afk_users
+    afk_users = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, user_id, reason, since, old_nick, image_url FROM afk_users"):
+        key = (row["guild_id"], row["user_id"])
+        afk_users[key] = {
+            "reason": row["reason"], "since": row["since"],
+            "old_nick": row["old_nick"], "image_url": row["image_url"]
+        }
+    conn.close()
 
-def _delete_selfrole_panel(message_id):
-  selfrole_map.pop(message_id, None)
-  _save_all()
+def save_afk():
+    conn = get_db()
+    conn.execute("DELETE FROM afk_users")
+    for (gid, uid), data in afk_users.items():
+        conn.execute(
+            "INSERT INTO afk_users (guild_id, user_id, reason, since, old_nick, image_url) VALUES (?,?,?,?,?,?)",
+            (int(gid), int(uid), data.get("reason"), data.get("since"), data.get("old_nick"), data.get("image_url"))
+        )
+    conn.commit()
+    conn.close()
 
-def _get_selfrole_panels(guild_id):
-  panels = {}
-  for mid, entries in selfrole_map.items():
-      panels[mid] = {"channel_id": None, "title": "", "entries": list(entries.items())}
-  return panels
+def load_afk_go_text():
+    global afk_go_text_map
+    afk_go_text_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, go_text FROM afk_settings"):
+        afk_go_text_map[str(row["guild_id"])] = row["go_text"] or ""
+    conn.close()
+
+def save_afk_go_text(guild_id, go_text):
+    gid = str(guild_id)
+    afk_go_text_map[gid] = go_text
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO afk_settings (guild_id, go_text) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET go_text=excluded.go_text",
+        (int(gid), go_text)
+    )
+    conn.commit()
+    conn.close()
+
+def load_staff_daily_text():
+    global staff_daily_text_map
+    staff_daily_text_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, title, description FROM staff_daily_text"):
+        staff_daily_text_map[str(row["guild_id"])] = {
+            "title": row["title"] or "", "description": row["description"] or ""
+        }
+    conn.close()
+
+def save_staff_daily_text(guild_id, title, description):
+    gid = str(guild_id)
+    staff_daily_text_map[gid] = {"title": title, "description": description}
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO staff_daily_text (guild_id, title, description) VALUES (?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET title=excluded.title, description=excluded.description",
+        (int(gid), title, description)
+    )
+    conn.commit()
+    conn.close()
+
+def load_staff_done_text():
+    global staff_done_text_map
+    staff_done_text_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, title, description FROM staff_done_text"):
+        staff_done_text_map[str(row["guild_id"])] = {
+            "title": row["title"] or "", "description": row["description"] or ""
+        }
+    conn.close()
+
+def save_staff_done_text(guild_id, title, description):
+    gid = str(guild_id)
+    staff_done_text_map[gid] = {"title": title, "description": description}
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO staff_done_text (guild_id, title, description) VALUES (?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET title=excluded.title, description=excluded.description",
+        (int(gid), title, description)
+    )
+    conn.commit()
+    conn.close()
+
+def load_ticket_panel_text():
+    global ticket_panel_text_map
+    ticket_panel_text_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, text_en, text_ku FROM ticket_panel_text"):
+        ticket_panel_text_map[str(row["guild_id"])] = {
+            "text_en": row["text_en"] or "", "text_ku": row["text_ku"] or ""
+        }
+    conn.close()
+
+def save_ticket_panel_text(guild_id, text_en, text_ku):
+    gid = str(guild_id)
+    ticket_panel_text_map[gid] = {"text_en": text_en, "text_ku": text_ku}
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO ticket_panel_text (guild_id, text_en, text_ku) VALUES (?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET text_en=excluded.text_en, text_ku=excluded.text_ku",
+        (int(gid), text_en, text_ku)
+    )
+    conn.commit()
+    conn.close()
+
+def load_verify_settings():
+    global verify_settings_map
+    verify_settings_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, role_id, channel_id FROM verify_settings"):
+        verify_settings_map[str(row["guild_id"])] = {
+            "role_id": row["role_id"], "channel_id": row["channel_id"]
+        }
+    conn.close()
+
+def save_verify_settings(guild_id, role_id, channel_id):
+    gid = str(guild_id)
+    verify_settings_map[gid] = {"role_id": role_id, "channel_id": channel_id}
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO verify_settings (guild_id, role_id, channel_id) VALUES (?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET role_id=excluded.role_id, channel_id=excluded.channel_id",
+        (int(gid), int(role_id), int(channel_id))
+    )
+    conn.commit()
+    conn.close()
+
+def load_eventspeed_settings():
+    global eventspeed_settings_map
+    eventspeed_settings_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, text, role_ids FROM eventspeed_settings"):
+        ids_raw = row["role_ids"] or ""
+        role_ids = [int(x) for x in ids_raw.split(",") if x.strip().isdigit()]
+        eventspeed_settings_map[str(row["guild_id"])] = {
+            "text": row["text"] or "", "role_ids": role_ids
+        }
+    conn.close()
+
+def save_eventspeed_settings(guild_id, text=None, role_ids=None):
+    gid = str(guild_id)
+    current = eventspeed_settings_map.get(gid, {"text": "", "role_ids": []})
+    if text is not None:
+        current["text"] = text
+    if role_ids is not None:
+        current["role_ids"] = list(role_ids)
+    eventspeed_settings_map[gid] = current
+    conn = get_db()
+    ids_str = ",".join(str(r) for r in current["role_ids"])
+    conn.execute(
+        "INSERT INTO eventspeed_settings (guild_id, text, role_ids) VALUES (?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET text=excluded.text, role_ids=excluded.role_ids",
+        (int(gid), current["text"], ids_str)
+    )
+    conn.commit()
+    conn.close()
+
+def load_antilink_settings():
+    global anti_link_guilds, antilink_channels_map
+    anti_link_guilds = {}
+    antilink_channels_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, enabled FROM antilink_settings"):
+        anti_link_guilds[str(row["guild_id"])] = bool(row["enabled"])
+    for row in conn.execute("SELECT guild_id, channel_id FROM antilink_channels"):
+        antilink_channels_map.setdefault(str(row["guild_id"]), set()).add(row["channel_id"])
+    conn.close()
+
+def save_antilink_enabled(guild_id, enabled: bool):
+    gid = str(guild_id)
+    anti_link_guilds[gid] = enabled
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO antilink_settings (guild_id, enabled) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled",
+        (int(gid), 1 if enabled else 0)
+    )
+    conn.commit()
+    conn.close()
+
+def toggle_antilink_channel(guild_id, channel_id) -> bool:
+    """Add/remove a channel from the antilink scope. Returns True if it is now enforced there."""
+    gid = str(guild_id)
+    chans = antilink_channels_map.setdefault(gid, set())
+    conn = get_db()
+    if channel_id in chans:
+        chans.discard(channel_id)
+        conn.execute("DELETE FROM antilink_channels WHERE guild_id=? AND channel_id=?", (int(gid), int(channel_id)))
+        added = False
+    else:
+        chans.add(channel_id)
+        conn.execute(
+            "INSERT OR IGNORE INTO antilink_channels (guild_id, channel_id) VALUES (?,?)",
+            (int(gid), int(channel_id))
+        )
+        added = True
+    conn.commit()
+    conn.close()
+    return added
+
+def load_antiswear_settings():
+    global antiswear_guilds, antiswear_words_map, antiswear_channels_map
+    antiswear_guilds = {}
+    antiswear_words_map = {}
+    antiswear_channels_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, enabled FROM antiswear_settings"):
+        antiswear_guilds[str(row["guild_id"])] = bool(row["enabled"])
+    for row in conn.execute("SELECT guild_id, word FROM antiswear_words"):
+        antiswear_words_map.setdefault(str(row["guild_id"]), set()).add(row["word"])
+    for row in conn.execute("SELECT guild_id, channel_id FROM antiswear_channels"):
+        antiswear_channels_map.setdefault(str(row["guild_id"]), set()).add(row["channel_id"])
+    conn.close()
+
+def save_antiswear_enabled(guild_id, enabled: bool):
+    gid = str(guild_id)
+    antiswear_guilds[gid] = enabled
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO antiswear_settings (guild_id, enabled) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled",
+        (int(gid), 1 if enabled else 0)
+    )
+    conn.commit()
+    conn.close()
+
+def save_antiswear_words(guild_id, words):
+    """Replace the full banned-word list for a guild. `words` is an iterable of lowercase strings."""
+    gid = str(guild_id)
+    clean = {w.strip().lower() for w in words if w and w.strip()}
+    antiswear_words_map[gid] = clean
+    conn = get_db()
+    conn.execute("DELETE FROM antiswear_words WHERE guild_id=?", (int(gid),))
+    for w in clean:
+        conn.execute("INSERT OR IGNORE INTO antiswear_words (guild_id, word) VALUES (?,?)", (int(gid), w))
+    conn.commit()
+    conn.close()
+
+def toggle_antiswear_channel(guild_id, channel_id) -> bool:
+    """Add/remove a channel from the antiswear scope. Returns True if it is now enforced there."""
+    gid = str(guild_id)
+    chans = antiswear_channels_map.setdefault(gid, set())
+    conn = get_db()
+    if channel_id in chans:
+        chans.discard(channel_id)
+        conn.execute("DELETE FROM antiswear_channels WHERE guild_id=? AND channel_id=?", (int(gid), int(channel_id)))
+        added = False
+    else:
+        chans.add(channel_id)
+        conn.execute(
+            "INSERT OR IGNORE INTO antiswear_channels (guild_id, channel_id) VALUES (?,?)",
+            (int(gid), int(channel_id))
+        )
+        added = True
+    conn.commit()
+    conn.close()
+    return added
 
 def get_econ(gid, uid):
     g = economy.setdefault(str(gid), {})
@@ -627,112 +1632,6 @@ def get_econ(gid, uid):
     })
 
 START_TIME = time.time()
-
-# ─── MISSING CONSTANTS & HELPERS (added to fix NameErrors) ───────────────────
-
-# Secret role name (used by !assign / !remove / !secret commands)
-# Set DISCORD_SECRET_ROLE env var on Railway, or change the default string here.
-secret_role = os.getenv("DISCORD_SECRET_ROLE", "Secret")
-
-# Passive XP tuning
-MESSAGE_XP_COOLDOWN  = 60     # seconds between message-XP awards per user
-MESSAGE_XP_MIN       = 15     # minimum XP gained per eligible message
-MESSAGE_XP_MAX       = 25     # maximum XP gained per eligible message
-VOICE_XP_PER_MINUTE  = 5      # XP awarded per full minute in a voice channel
-
-# Hangman ASCII stages (index = number of wrong guesses, 0-6)
-HANGMAN_STAGES = [
-    "```\n  +---+\n  |   |\n      |\n      |\n      |\n      |\n=========```",
-    "```\n  +---+\n  |   |\n  O   |\n      |\n      |\n      |\n=========```",
-    "```\n  +---+\n  |   |\n  O   |\n  |   |\n      |\n      |\n=========```",
-    "```\n  +---+\n  |   |\n  O   |\n /|   |\n      |\n      |\n=========```",
-    "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n      |\n      |\n=========```",
-    "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n /    |\n      |\n=========```",
-    "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n / \\  |\n      |\n=========```",
-]
-
-def render_hangman(game: dict) -> str:
-    """Return a formatted string showing the current hangman game state."""
-    wrong_count = len(game.get("wrong", set()))
-    stage = HANGMAN_STAGES[min(wrong_count, len(HANGMAN_STAGES) - 1)]
-    word = game.get("word", "")
-    guessed = game.get("guessed", set())
-    display = " ".join(c if c in guessed else "_" for c in word)
-    wrong_letters = ", ".join(sorted(game.get("wrong", set()))) or "None | هیچ"
-    lives_left = 6 - wrong_count
-    return (
-        f"{stage}\n"
-        f"**Word | وشە:** `{display}`\n"
-        f"**Wrong | هەڵە:** {wrong_letters}\n"
-        f"**Lives left | ژیانی ماوە:** {lives_left}/6"
-    )
-
-# ─── WELCOME EMBED SETTINGS HELPERS ─────────────────────────────────────────
-
-_WES_DEFAULTS = {
-    "title":         "🎉 بەخێربێیت بۆ {guild}! | Welcome to {guild}!",
-    "description":   "خۆشحاڵین بینینت، {user}! | We're glad to see you, {user}!",
-    "color":         0xFFD700,
-    "image_url":     "",
-    "thumbnail_url": "avatar",
-    "invite_text":   "Invited by {inviter} · {count} invite(s)",
-    "channel_id":    "",
-}
-
-def get_welcome_embed_settings(guild_id) -> dict:
-    """Return the welcome embed settings dict for *guild_id* (with defaults)."""
-    gid = str(guild_id)
-    stored = welcome_embed_settings.get(gid, {})
-    merged = dict(_WES_DEFAULTS)
-    merged.update(stored)
-    return merged
-
-def save_welcome_embed_setting(guild_id, **kwargs):
-    """Update one or more welcome embed setting keys and persist."""
-    gid = str(guild_id)
-    if gid not in welcome_embed_settings:
-        welcome_embed_settings[gid] = {}
-    welcome_embed_settings[gid].update(kwargs)
-    save_welcome_embed_settings()   # calls _save_all()
-
-def apply_welcome_placeholders(
-    text: str,
-    member,
-    inviter=None,
-    inv_total: int = 0,
-    channel_id: str = "",
-) -> str:
-    """Replace {user}, {guild}, {inviter}, {count}, (channelid) placeholders."""
-    if not text:
-        return text
-    inviter_str = inviter.mention if inviter else "Unknown"
-    channel_str = f"<#{channel_id}>" if channel_id and str(channel_id).isdigit() else ""
-    replacements = {
-        "{user}":        member.mention,
-        "{username}":    str(member),
-        "{guild}":       member.guild.name if member.guild else "",
-        "{inviter}":     inviter_str,
-        "{count}":       str(inv_total),
-        "(channelid)":   channel_str,
-    }
-    for placeholder, value in replacements.items():
-        text = text.replace(placeholder, value)
-    return text
-
-# ─── ISLAM / BOOST SAVE SHORTCUTS ────────────────────────────────────────────
-
-def save_islam_last_msg(guild_id, msg_id):
-    """Persist the last islam-ping message ID for a guild."""
-    islam_last_msg_map[str(guild_id)] = msg_id
-    _save_all()
-
-def save_boost_channel(guild_id, channel_id):
-    """Persist the boost-celebration channel for a guild."""
-    boost_channels[str(guild_id)] = channel_id
-    _save_all()
-
-# ─── END OF MISSING DEFINITIONS ──────────────────────────────────────────────
-
 
 # --- UTILITY FUNCTIONS ---
 
@@ -829,24 +1728,55 @@ async def announce_level_up(member, fallback_channel, new_level, source):
 # ─── SELFROLE EMOJI REACTION HELPERS ─────────────────────────────────────────
 
 def load_selfrole():
-    pass  # loaded via _load_all()
+    global selfrole_map
+    selfrole_map = {}
+    conn = get_db()
+    for row in conn.execute("SELECT message_id, emoji, role_id FROM selfrole_reactions"):
+        mid = row["message_id"]
+        selfrole_map.setdefault(mid, {})[row["emoji"]] = row["role_id"]
+    conn.close()
 
 def _save_selfrole_panel(guild_id, message_id, channel_id, title):
-    _save_all()
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO selfrole_panels (guild_id, message_id, channel_id, title) VALUES (?,?,?,?)",
+        (guild_id, message_id, channel_id, title)
+    )
+    conn.commit()
+    conn.close()
 
 def _save_selfrole_entry(guild_id, message_id, emoji, role_id):
-    selfrole_map.setdefault(message_id, {})[emoji] = role_id
-    _save_all()
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO selfrole_reactions (guild_id, message_id, emoji, role_id) VALUES (?,?,?,?)",
+        (guild_id, message_id, emoji, role_id)
+    )
+    conn.commit()
+    conn.close()
 
 def _delete_selfrole_panel(message_id):
-    selfrole_map.pop(message_id, None)
-    _save_all()
+    conn = get_db()
+    conn.execute("DELETE FROM selfrole_reactions WHERE message_id=?", (message_id,))
+    conn.execute("DELETE FROM selfrole_panels  WHERE message_id=?", (message_id,))
+    conn.commit()
+    conn.close()
 
 def _get_selfrole_panels(guild_id):
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT p.message_id, p.channel_id, p.title, r.emoji, r.role_id "
+        "FROM selfrole_panels p JOIN selfrole_reactions r ON p.message_id=r.message_id "
+        "WHERE p.guild_id=?", (guild_id,)
+    ).fetchall()
+    conn.close()
     panels = {}
-    for mid, entries in selfrole_map.items():
-        panels[mid] = {"channel_id": None, "title": "", "entries": list(entries.items())}
+    for r in rows:
+        mid = r["message_id"]
+        if mid not in panels:
+            panels[mid] = {"channel_id": r["channel_id"], "title": r["title"], "entries": []}
+        panels[mid]["entries"].append((r["emoji"], r["role_id"]))
     return panels
+
 def parse_duration(text):
     units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
     m = re.match(r"^(\d+)([smhd])$", text.lower())
@@ -882,8 +1812,6 @@ load_afk_go_text()
 load_staff_daily_text()
 load_antilink_settings()
 load_antiswear_settings()
-load_autoreact()
-load_antiemoji()
 load_staff_done_text()
 load_ticket_panel_text()
 load_verify_settings()
@@ -914,8 +1842,6 @@ async def on_ready():
     bot.add_view(IslamSetupView())
     bot.add_view(AntiSwearPanelView())
     bot.add_view(VerifyPanelView())
-    bot.add_view(AutoReactPanelView())
-    bot.add_view(AntiEmojiPanelView())
     for mid, buttons in list(rr_data.items()):
         if buttons:
             bot.add_view(ReactionRoleView(mid, buttons))
@@ -1062,9 +1988,12 @@ async def on_member_join(member):
 
     # --- AUTO-ROLE ASSIGNMENT ---
     try:
-        _ar_role_id = autorole_settings_map.get(gid)
-        if _ar_role_id:
-            _ar_role = member.guild.get_role(_ar_role_id)
+        with get_db() as _ar_conn:
+            _ar_row = _ar_conn.execute(
+                'SELECT role_id FROM autorole_settings WHERE guild_id=?', (gid,)
+            ).fetchone()
+        if _ar_row:
+            _ar_role = member.guild.get_role(_ar_row['role_id'])
             if _ar_role and _ar_role < member.guild.me.top_role:
                 await member.add_roles(_ar_role, reason='Auto-role on join')
     except Exception:
@@ -1137,71 +2066,6 @@ async def on_message(message):
                     except (discord.Forbidden, discord.HTTPException):
                         pass
                     return
-
-    # --- ANTI-EMOJI FILTER ---
-    if message.guild and antiemoji_guilds.get(str(message.guild.id)):
-        _ae_gid = str(message.guild.id)
-        _banned_emojis = antiemoji_emojis_map.get(_ae_gid, set())
-        _ae_scoped = antiemoji_channels_map.get(_ae_gid, set())
-        _ae_in_scope = (not _ae_scoped) or (message.channel.id in _ae_scoped)
-        if _banned_emojis and _ae_in_scope:
-            _content = message.content
-            _found_emoji = None
-            # Custom Discord emoji: <:name:id> or <a:name:id>
-            _custom_emojis_in_msg = re.findall(r'<a?:[^:]+:\d+>', _content)
-            for _ce in _custom_emojis_in_msg:
-                if _ce in _banned_emojis:
-                    _found_emoji = _ce
-                    break
-            # Unicode emoji / character check
-            if not _found_emoji:
-                for _char in _content:
-                    if _char in _banned_emojis:
-                        _found_emoji = _char
-                        break
-            if _found_emoji:
-                _ae_exempt = any(
-                    r.permissions.manage_messages or r.permissions.administrator
-                    for r in getattr(message.author, 'roles', [])
-                )
-                if not _ae_exempt:
-                    try:
-                        await message.delete()
-                    except (discord.Forbidden, discord.HTTPException):
-                        pass
-                    try:
-                        await message.channel.send(
-                            f"\u26d4 {message.author.mention} \u0626\u06d5\u0645 \u0626\u06cc\u0645\u06c6\u062c\u06cc\u06cc\u06d5 \u0642\u06d5\u062f\u06d5\u063a\u06d5\u06cc\u06d5! | "
-                            f"That emoji is banned here!",
-                            delete_after=5
-                        )
-                    except (discord.Forbidden, discord.HTTPException):
-                        pass
-                    return
-
-    # --- AUTO-REACT ---
-    if message.guild and not message.content.startswith(bot.command_prefix):
-        _ar_gid = str(message.guild.id)
-        _ar_emojis = autoreact_emojis_map.get(_ar_gid, [])
-        _ar_chans = autoreact_channels_map_ar.get(_ar_gid, set())
-        _ar_in_scope = (not _ar_chans) or (message.channel.id in _ar_chans)
-        if _ar_emojis and _ar_in_scope:
-            for _emoji_str in _ar_emojis:
-                try:
-                    _cm = re.match(r'<(a)?:([^:]+):(\d+)>', _emoji_str)
-                    if _cm:
-                        _partial = discord.PartialEmoji(
-                            animated=bool(_cm.group(1)),
-                            name=_cm.group(2),
-                            id=int(_cm.group(3))
-                        )
-                        await message.add_reaction(_partial)
-                    else:
-                        await message.add_reaction(_emoji_str)
-                except (discord.HTTPException, discord.Forbidden, discord.InvalidArgument):
-                    pass
-
-
 
     if message.guild is not None:
         # --- COOLER AFK SYSTEM: RETURN FROM AFK ---
@@ -1328,16 +2192,19 @@ async def on_message(message):
             guild_id = game.get("guild_id")
             lucky_games.pop(message.channel.id, None)
             if guild_id:
-                _gk  = str(guild_id)
-                _uk  = str(message.author.id)
-                _lbd = lucky_leaderboard_data.setdefault(_gk, {})
-                _ue  = _lbd.setdefault(_uk, {"wins": 0, "total_guesses": 0, "best_guesses": 0})
-                _ue["wins"]          += 1
-                _ue["total_guesses"] += guesses_taken
-                _pb = _ue["best_guesses"]
-                if _pb == 0 or guesses_taken < _pb:
-                    _ue["best_guesses"] = guesses_taken
-                _save_all()
+                conn = get_db()
+                conn.execute(
+                    "INSERT INTO lucky_leaderboard (guild_id, user_id, wins, total_guesses, best_guesses) "
+                    "VALUES (?, ?, 1, ?, ?) "
+                    "ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+                    "wins = wins + 1, "
+                    "total_guesses = total_guesses + excluded.total_guesses, "
+                    "best_guesses = CASE WHEN best_guesses = 0 OR excluded.best_guesses < best_guesses "
+                    "THEN excluded.best_guesses ELSE best_guesses END",
+                    (guild_id, message.author.id, guesses_taken, guesses_taken)
+                )
+                conn.commit()
+                conn.close()
             win_embed = discord.Embed(
                 title="🎉 Correct! / دروستە!",
                 description=(
@@ -1658,267 +2525,18 @@ async def on_message(message):
 
     # --- NO-PREFIX LINK TRIGGER ---
     if message.guild is not None and message.content.strip().lower() == "link":
-        _lk_row = link_settings_map.get(str(message.guild.id))
+        with get_db() as _lk_conn:
+            _lk_row = _lk_conn.execute(
+                "SELECT label, url FROM link_settings WHERE guild_id=?", (message.guild.id,)
+            ).fetchone()
         if _lk_row:
-            _lk_url = _lk_row.get('url', '')
+            _lk_url = _lk_row['url']
             _lk_content = f"<#{_lk_url}>" if _lk_url.isdigit() else _lk_url
             try:
                 await message.channel.send(_lk_content)
             except (discord.Forbidden, discord.HTTPException):
                 pass
         return
-
-    # --- NO-PREFIX tmo / untmo / nick SHORTCUTS ---
-    if message.guild is not None:
-        _np  = message.content.strip()
-        _np_lower = _np.lower()
-
-        # ── helper: permission check ─────────────────────────────────────────
-        def _mod_perm():
-            return (
-                message.channel.permissions_for(message.author).moderate_members
-                or message.channel.permissions_for(message.author).administrator
-            )
-        def _nick_perm():
-            return (
-                message.channel.permissions_for(message.author).manage_nicknames
-                or message.channel.permissions_for(message.author).administrator
-            )
-
-        # ── helper: resolve member from a raw token (mention or ID) ──────────
-        def _resolve_member(token: str):
-            mid = token.strip("<@!>")
-            if mid.isdigit():
-                return message.guild.get_member(int(mid))
-            return None
-
-        # ════════════════════════════════════════════════════════════════════
-        # tmo  — timeout shortcut
-        # ════════════════════════════════════════════════════════════════════
-        if _np_lower == "tmo" or _np_lower.startswith("tmo "):
-            # ── no args → show cool help embed ───────────────────────────────
-            if _np_lower == "tmo":
-                _e = discord.Embed(
-                    title="⏱️ Command: timeout",
-                    description="Timeout a member — prevents them from sending messages,\nadding reactions, or joining voice channels.",
-                    color=0xE67E22,
-                )
-                _e.add_field(
-                    name="Aliases",
-                    value="`!timeout`  `!tmo`  `tmo`",
-                    inline=False,
-                )
-                _e.add_field(
-                    name="Usage",
-                    value=(
-                        "`tmo @member`\n"
-                        "`tmo @member [minutes]`\n"
-                        "`tmo @member [minutes] [reason]`\n\n"
-                        "`!timeout @member [minutes] [reason]`\n"
-                        "`!tmo @member [minutes] [reason]`"
-                    ),
-                    inline=False,
-                )
-                _e.add_field(
-                    name="Examples",
-                    value=(
-                        "`tmo @B50`\n"
-                        "`tmo @B50 30`\n"
-                        "`tmo @B50 60 Spamming`\n"
-                        "`!tmo @B50 10 Breaking rules`"
-                    ),
-                    inline=False,
-                )
-                _e.set_footer(text="Default duration: 10 minutes  •  Max: 28 days (40320 min)")
-                await message.channel.send(embed=_e)
-                return
-
-            # ── has args → execute ────────────────────────────────────────────
-            if not _mod_perm():
-                await message.channel.send("❌ مووچەی Moderate Members پێویستە. | You need Moderate Members permission.")
-                return
-            _parts = _np.split(None, 3)
-            _tmo_member  = _resolve_member(_parts[1]) if len(_parts) >= 2 else None
-            _tmo_minutes = 10
-            _tmo_reason  = "No reason provided | هیچ هۆکارێک نەدراوە"
-            if _tmo_member is None:
-                _e2 = discord.Embed(
-                    description="❌ Member not found — mention or ID required.\n`tmo @member [minutes] [reason]`",
-                    color=0xE74C3C,
-                )
-                await message.channel.send(embed=_e2)
-                return
-            if len(_parts) >= 3 and _parts[2].isdigit():
-                _tmo_minutes = int(_parts[2])
-                if len(_parts) >= 4:
-                    _tmo_reason = _parts[3]
-            elif len(_parts) >= 3:
-                _tmo_reason = " ".join(_parts[2:])
-            if _tmo_minutes < 1 or _tmo_minutes > 40320:
-                await message.channel.send("❌ Duration must be 1–40320 minutes (28 days).")
-                return
-            _until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=_tmo_minutes)
-            try:
-                await _tmo_member.timeout(_until, reason=_tmo_reason)
-                _ok = discord.Embed(
-                    description=(
-                        f"⏱️ {_tmo_member.mention} بێدەنگ کرا بۆ **{_tmo_minutes}** خولەک.\n"
-                        f"⏱️ Timed out for **{_tmo_minutes}** minute(s).\n"
-                        f"📋 Reason: {_tmo_reason}"
-                    ),
-                    color=0xE67E22,
-                )
-                _ok.set_footer(text=f"By {message.author}")
-                await message.channel.send(embed=_ok)
-            except discord.Forbidden:
-                await message.channel.send("❌ I don't have permission to timeout that member.")
-            return
-
-        # ════════════════════════════════════════════════════════════════════
-        # untmo  — remove timeout shortcut
-        # ════════════════════════════════════════════════════════════════════
-        if _np_lower == "untmo" or _np_lower.startswith("untmo "):
-            # ── no args → show cool help embed ───────────────────────────────
-            if _np_lower == "untmo":
-                _e = discord.Embed(
-                    title="🔓 Command: untimeout",
-                    description="Remove an active timeout from a member,\nrestoring their ability to chat and join voice.",
-                    color=0x2ECC71,
-                )
-                _e.add_field(
-                    name="Aliases",
-                    value="`!untimeout`  `!untmo`  `untmo`",
-                    inline=False,
-                )
-                _e.add_field(
-                    name="Usage",
-                    value=(
-                        "`untmo @member`\n"
-                        "`!untimeout @member`\n"
-                        "`!untmo @member`"
-                    ),
-                    inline=False,
-                )
-                _e.add_field(
-                    name="Examples",
-                    value=(
-                        "`untmo @B50`\n"
-                        "`!untmo @B50`\n"
-                        "`!untimeout @B50`"
-                    ),
-                    inline=False,
-                )
-                _e.set_footer(text="Member must currently be timed out")
-                await message.channel.send(embed=_e)
-                return
-
-            # ── has args → execute ────────────────────────────────────────────
-            if not _mod_perm():
-                await message.channel.send("❌ مووچەی Moderate Members پێویستە. | You need Moderate Members permission.")
-                return
-            _parts2 = _np.split(None, 2)
-            _untmo_member = _resolve_member(_parts2[1]) if len(_parts2) >= 2 else None
-            if _untmo_member is None:
-                _e2 = discord.Embed(
-                    description="❌ Member not found — mention or ID required.\n`untmo @member`",
-                    color=0xE74C3C,
-                )
-                await message.channel.send(embed=_e2)
-                return
-            if _untmo_member.timed_out_until is None:
-                await message.channel.send(f"ℹ️ {_untmo_member.mention} isn't currently timed out. | بێدەنگ نەکراوە.")
-                return
-            try:
-                await _untmo_member.timeout(None, reason=f"Timeout removed by {message.author}")
-                _ok = discord.Embed(
-                    description=(
-                        f"✅ Timeout removed from {_untmo_member.mention}.\n"
-                        f"✅ بێدەنگیی {_untmo_member.mention} لادرا."
-                    ),
-                    color=0x2ECC71,
-                )
-                _ok.set_footer(text=f"By {message.author}")
-                await message.channel.send(embed=_ok)
-            except discord.Forbidden:
-                await message.channel.send("❌ I don't have permission to remove that timeout.")
-            return
-
-        # ════════════════════════════════════════════════════════════════════
-        # nick  — nickname shortcut (no prefix)
-        # ════════════════════════════════════════════════════════════════════
-        if _np_lower == "nick" or _np_lower.startswith("nick "):
-            # ── no args → show cool help embed ───────────────────────────────
-            if _np_lower == "nick":
-                _e = discord.Embed(
-                    title="✏️ Command: nickname",
-                    description="Change or reset a member's server nickname.",
-                    color=0x3498DB,
-                )
-                _e.add_field(
-                    name="Aliases",
-                    value="`!nickname`  `!nick`  `nick`",
-                    inline=False,
-                )
-                _e.add_field(
-                    name="Usage",
-                    value=(
-                        "`nick @member [new nickname]`\n"
-                        "`nick @member` — omit nickname to **reset**\n\n"
-                        "`!nickname @member [new nickname]`\n"
-                        "`!nick @member [new nickname]`"
-                    ),
-                    inline=False,
-                )
-                _e.add_field(
-                    name="Examples",
-                    value=(
-                        "`nick @B50 Cool Guy`\n"
-                        "`nick @B50` *(resets nickname)*\n"
-                        "`!nick @B50 VLT Leader`"
-                    ),
-                    inline=False,
-                )
-                _e.set_footer(text="Requires: Manage Nicknames permission")
-                await message.channel.send(embed=_e)
-                return
-
-            # ── has args → execute ────────────────────────────────────────────
-            if not _nick_perm():
-                await message.channel.send("❌ مووچەی Manage Nicknames پێویستە. | You need Manage Nicknames permission.")
-                return
-            _parts3 = _np.split(None, 2)
-            _nick_member = _resolve_member(_parts3[1]) if len(_parts3) >= 2 else None
-            if _nick_member is None:
-                _e2 = discord.Embed(
-                    description="❌ Member not found — mention or ID required.\n`nick @member [new nickname]`",
-                    color=0xE74C3C,
-                )
-                await message.channel.send(embed=_e2)
-                return
-            _new_nick = _parts3[2] if len(_parts3) >= 3 else None
-            try:
-                await _nick_member.edit(nick=_new_nick)
-                if _new_nick:
-                    _ok = discord.Embed(
-                        description=(
-                            f"✏️ {_nick_member.mention} — ناوی نمایشی گۆڕدرا بۆ **{_new_nick}**.\n"
-                            f"✏️ Nickname changed to **{_new_nick}**."
-                        ),
-                        color=0x3498DB,
-                    )
-                else:
-                    _ok = discord.Embed(
-                        description=(
-                            f"🔄 {_nick_member.mention} — ناوی نمایشی ڕێکخرایەوە.\n"
-                            f"🔄 Nickname has been reset."
-                        ),
-                        color=0x3498DB,
-                    )
-                _ok.set_footer(text=f"By {message.author}")
-                await message.channel.send(embed=_ok)
-            except discord.Forbidden:
-                await message.channel.send("❌ I don't have permission to change that member's nickname.")
-            return
 
     # --- PROCESS PREFIX COMMANDS (!command) ---
     await bot.process_commands(message)
@@ -5184,7 +5802,7 @@ async def mute_error(ctx, error):
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: $mute @member [minutes] [reason] | بەکارهێنان: $mute @ئەندام [خولەک] [هۆکار]")
 
-@bot.command(aliases=["untimeout", "unmute_", "unt", "untmo"])
+@bot.command(aliases=["untimeout", "unmute_", "unt"])
 @commands.has_permissions(moderate_members=True)
 async def unmute(ctx, member: discord.Member = None):
     if member is None:
@@ -5542,12 +6160,13 @@ async def luckylb(ctx):
     if ctx.guild is None:
         await ctx.send("This command can only be used in a server. | ئەم فەرمانە تەنها لە سێرڤەر دەکرێت بەکارهێنرێت.")
         return
-    _gk = str(ctx.guild.id)
-    _raw_lb = lucky_leaderboard_data.get(_gk, {})
-    rows = sorted(
-        [{"user_id": int(uid), **v} for uid, v in _raw_lb.items() if v.get("wins", 0) > 0],
-        key=lambda x: (-x["wins"], x.get("best_guesses", 0))
-    )[:10]
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT user_id, wins, total_guesses, best_guesses FROM lucky_leaderboard "
+        "WHERE guild_id = ? AND wins > 0 ORDER BY wins DESC, best_guesses ASC LIMIT 10",
+        (ctx.guild.id,)
+    ).fetchall()
+    conn.close()
     if not rows:
         await ctx.send("Nobody has won the Lucky game yet! Start one with `!lucky`. | هێشتا کەس یاری بەختەوارى نەبردووە! بە `!lucky` دەستپێبکە.")
         return
@@ -5557,8 +6176,8 @@ async def luckylb(ctx):
         member = ctx.guild.get_member(row["user_id"])
         name = member.display_name if member else f"User {row['user_id']}"
         prefix = medals[i] if i < 3 else f"`#{i+1}`"
-        avg = round(row.get("total_guesses", 0) / row["wins"], 1) if row["wins"] else 0
-        best = row.get("best_guesses", 0)
+        avg = round(row["total_guesses"] / row["wins"], 1) if row["wins"] else 0
+        best = row["best_guesses"]
         lines.append(
             f"{prefix} **{name}**\n"
             f"> 🏆 Wins: **{row['wins']}** · ⚡ Best: **{best}** guesses · 📊 Avg: **{avg}**"
@@ -7519,9 +8138,8 @@ HELP_CATEGORIES = [
         ("!warn @member [reason]",            "Warn a member | ئاگادار بکە"),
         ("!warnings @member",                 "View warnings | ئاگاداریەکان ببینە"),
         ("!clearwarns @member",               "Clear warnings | ئاگاداریەکان بسڕەوە"),
-        ("!timeout / !tmo / tmo @member <min>", "Timeout a member | تایم‌ئاوت بکە"),
-        ("!untimeout / !untmo / untmo @member","Remove timeout | تایم‌ئاوت لابدە"),
-        ("!nickname / !nick / nick @member",  "Change nickname | پشکنامە بگۆڕە"),
+        ("!timeout @member <minutes>",        "Timeout a member | تایم‌ئاوت بکە"),
+        ("!nickname @member <name>",          "Change nickname | پشکنامە بگۆڕە"),
         ("!addrole @member @role",            "Add role to member | رۆڵ زیاد بکە"),
         ("!removerole @member @role",         "Remove role from member | رۆڵ لابدە"),
         ("!giverole @member @role",           "Give a role (admin) | رۆڵ ببەخشە"),
@@ -7974,7 +8592,13 @@ async def languageallbot_cmd(ctx, lang: str = None):
         )
         return await ctx.send(embed=e)
     guild_langs[str(ctx.guild.id)] = lang
-    _save_all()
+    with get_db() as _conn:
+        _conn.execute(
+            "INSERT INTO guild_lang_settings (guild_id, lang) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET lang=excluded.lang",
+            (ctx.guild.id, lang)
+        )
+        _conn.commit()
     _names = {"en": "English 🇬🇧", "ku": "کوردی 🏳️", "both": "Bilingual 🌐"}
     e = discord.Embed(
         color=0x57F287,
@@ -11334,232 +11958,96 @@ async def setantilinkchannel_error(ctx, error):
 
 # ═══════════════ ANTI-SWEAR FILTER ═══════════════
 
-# ─── Anti-Swear: shared embed builder (tag-chip display) ──────────────────────
-def _antiswear_panel_embed(guild_id: str) -> discord.Embed:
-    gid = str(guild_id)
-    enabled = antiswear_guilds.get(gid, False)
-    words   = sorted(antiswear_words_map.get(gid, set()))
-    scoped  = antiswear_channels_map.get(gid, set())
-    scope_text = (", ".join(f"<#{c}>" for c in scoped)
-                  if scoped else "All channels | هەموو کەناڵەکان")
-    color       = 0x57F287 if enabled else 0xED4245
-    status_text = "✅ Enabled | چالاک" if enabled else "❌ Disabled | ناچالاک"
-
-    # Build tag chips — group into lines so the field doesn't overflow
-    if words:
-        chips = [f"`{w}`" for w in words]
-        lines, line, line_len = [], [], 0
-        for chip in chips:
-            clen = len(chip) + 2
-            if line_len + clen > 58 and line:
-                lines.append("  ".join(line))
-                line, line_len = [chip], clen
-            else:
-                line.append(chip)
-                line_len += clen
-        if line:
-            lines.append("  ".join(line))
-        tag_display = "\n".join(lines)
-        if len(tag_display) > 1000:
-            tag_display = tag_display[:997] + "…"
-    else:
-        tag_display = "*No words banned yet*\n*Click **➕ Add Words** to start*"
-
-    embed = discord.Embed(
-        color=color,
-        title="🚫 Anti-Swear Filter | فیلتەری قسەی خراپ",
-    )
-    embed.add_field(name="Status | دۆخ",   value=status_text,      inline=True)
-    embed.add_field(name="Words | وشەکان", value=str(len(words)),   inline=True)
-    embed.add_field(name="Scope | کەناڵ",  value=scope_text,        inline=True)
-    embed.add_field(
-        name=f"🏷️  BAD WORDS  ({len(words)})",
-        value=tag_display,
-        inline=False,
-    )
-    embed.set_footer(text="➕ Add  •  ➖ Remove specific  •  🗑️ Clear all  •  🔄 Toggle on/off")
-    return embed
-
-
-# ─── Modal: Add words (appends to existing list) ──────────────────────────────
-class AntiSwearAddModal(discord.ui.Modal, title="➕ Add Banned Words"):
+class AntiSwearWordsModal(discord.ui.Modal, title="📝 Anti-Swear Words"):
     words_input = discord.ui.TextInput(
-        label="Words / phrases to ban",
+        label="Banned words | وشەی قەدەغەکراو",
         style=discord.TextStyle.paragraph,
-        placeholder=(
-            "Type words separated by commas or new lines:\n"
-            "badword, another phrase, word3\n"
-            "word4\nword5"
-        ),
+        placeholder="Separate words with commas or new lines...",
         max_length=2000,
-        required=True,
+        required=False,
     )
+
+    def __init__(self, current_words: str = ""):
+        super().__init__()
+        self.words_input.default = current_words
 
     async def on_submit(self, interaction: discord.Interaction):
         gid = str(interaction.guild.id) if interaction.guild else None
-        if not gid:
-            return await interaction.response.send_message("❌ Server only.", ephemeral=True)
         raw = self.words_input.value or ""
-        new_words = [
-            w.strip()
-            for chunk in raw.replace("\n", ",").split(",")
-            for w in [chunk.strip()] if w.strip()
-        ]
-        if not new_words:
-            return await interaction.response.send_message(
-                "❌ No valid words found. | هیچ وشەیەکی دروست نەدۆزرایەوە.", ephemeral=True
-            )
-        current  = set(antiswear_words_map.get(gid, set()))
-        existing = {x.lower() for x in current}
-        added    = [w for w in new_words if w.lower() not in existing]
-        current.update(new_words)
-        save_antiswear_words(gid, current)
-        if not antiswear_guilds.get(gid, False):
-            save_antiswear_enabled(gid, True)
-        chips = "  ".join(f"`{w}`" for w in added[:20])
-        suffix = f" *(+{len(added) - 20} more)*" if len(added) > 20 else ""
-        notice = (
-            f"✅ Added **{len(added)}** new word(s): {chips}{suffix}"
-            if added else
-            "ℹ️ All those words were already in the list."
-        )
-        embed = _antiswear_panel_embed(gid)
-        await interaction.response.edit_message(
-            content=notice, embed=embed, view=AntiSwearPanelView()
+        words = [w for chunk in raw.split("\n") for w in chunk.split(",")]
+        words = [w.strip() for w in words if w.strip()]
+        if gid:
+            save_antiswear_words(gid, words)
+            if words and not antiswear_guilds.get(gid, False):
+                save_antiswear_enabled(gid, True)
+        count = len(antiswear_words_map.get(gid, set())) if gid else 0
+        await interaction.response.send_message(
+            f"✅ وشەی قەدەغەکراو نوێکرایەوە ({count} وشە). | Banned word list updated ({count} word(s)).",
+            ephemeral=True,
         )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         try:
-            await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ هەڵەیەک ڕوویدا. | An error occurred.", ephemeral=True
+            )
         except Exception:
             pass
 
 
-# ─── Ephemeral remove-select (one page = up to 25 words) ──────────────────────
-class AntiSwearRemoveView(discord.ui.View):
-    def __init__(self, guild_id: str, words: list, page: int = 0):
-        super().__init__(timeout=60)
-        self.gid   = guild_id
-        self.words = words
-        self.page  = page
-        self._build(words, page)
-
-    def _build(self, words, page):
-        start = page * 25
-        chunk = words[start : start + 25]
-        options = [discord.SelectOption(label=w[:100], value=w[:100]) for w in chunk]
-        sel = discord.ui.Select(
-            placeholder=f"Select words to remove  ({start+1}–{start+len(chunk)} of {len(words)})",
-            min_values=1,
-            max_values=len(options),
-            options=options,
-        )
-        sel.callback = self._on_select
-        self.add_item(sel)
-        # Prev / Next page buttons
-        if page > 0:
-            btn_prev = discord.ui.Button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=1)
-            btn_prev.callback = self._prev
-            self.add_item(btn_prev)
-        if (page + 1) * 25 < len(words):
-            btn_next = discord.ui.Button(label="Next ▶", style=discord.ButtonStyle.secondary, row=1)
-            btn_next.callback = self._next
-            self.add_item(btn_next)
-
-    async def _on_select(self, interaction: discord.Interaction):
-        chosen  = set(interaction.data["values"])
-        current = set(antiswear_words_map.get(self.gid, set()))
-        current -= chosen
-        save_antiswear_words(self.gid, current)
-        chips = "  ".join(f"`{w}`" for w in sorted(chosen))
-        await interaction.response.edit_message(
-            content=f"✅ Removed **{len(chosen)}** word(s): {chips}", view=None
-        )
-
-    async def _prev(self, interaction: discord.Interaction):
-        new_view = AntiSwearRemoveView(self.gid, self.words, self.page - 1)
-        await interaction.response.edit_message(view=new_view)
-
-    async def _next(self, interaction: discord.Interaction):
-        new_view = AntiSwearRemoveView(self.gid, self.words, self.page + 1)
-        await interaction.response.edit_message(view=new_view)
-
-
-# ─── Main persistent panel ────────────────────────────────────────────────────
 class AntiSwearPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    def _can(self, interaction: discord.Interaction) -> bool:
-        p = interaction.user.guild_permissions
-        return p.administrator or p.manage_guild
-
-    @discord.ui.button(label="➕ Add Words", style=discord.ButtonStyle.success,
-                       custom_id="antiswear:add", row=0)
-    async def add_words(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self._can(interaction):
+    @discord.ui.button(
+        label="📝 Text Words | وشەکان",
+        style=discord.ButtonStyle.secondary,
+        custom_id="antiswear:words",
+        row=0,
+    )
+    async def text_words(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message(
-                "❌ Manage Server permission required.", ephemeral=True)
-        await interaction.response.send_modal(AntiSwearAddModal())
-
-    @discord.ui.button(label="➖ Remove Words", style=discord.ButtonStyle.danger,
-                       custom_id="antiswear:remove", row=0)
-    async def remove_words(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self._can(interaction):
-            return await interaction.response.send_message(
-                "❌ Manage Server permission required.", ephemeral=True)
-        gid   = str(interaction.guild.id)
-        words = sorted(antiswear_words_map.get(gid, set()))
-        if not words:
-            return await interaction.response.send_message(
-                "ℹ️ No words to remove yet.", ephemeral=True)
-        await interaction.response.send_message(
-            "Select words to remove:", view=AntiSwearRemoveView(gid, words), ephemeral=True)
-
-    @discord.ui.button(label="🗑️ Clear All", style=discord.ButtonStyle.secondary,
-                       custom_id="antiswear:clear", row=0)
-    async def clear_all(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self._can(interaction):
-            return await interaction.response.send_message(
-                "❌ Manage Server permission required.", ephemeral=True)
-        gid = str(interaction.guild.id)
-        save_antiswear_words(gid, set())
-        embed = _antiswear_panel_embed(gid)
-        await interaction.response.edit_message(
-            content="🗑️ Cleared all banned words.", embed=embed, view=AntiSwearPanelView())
-
-    @discord.ui.button(label="🔄 Toggle On/Off", style=discord.ButtonStyle.primary,
-                       custom_id="antiswear:toggle", row=1)
-    async def toggle_filter(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self._can(interaction):
-            return await interaction.response.send_message(
-                "❌ Manage Server permission required.", ephemeral=True)
-        gid        = str(interaction.guild.id)
-        new_status = not antiswear_guilds.get(gid, False)
-        save_antiswear_enabled(gid, new_status)
-        embed  = _antiswear_panel_embed(gid)
-        status = "✅ Filter enabled" if new_status else "❌ Filter disabled"
-        await interaction.response.edit_message(
-            content=status, embed=embed, view=AntiSwearPanelView())
+                "❌ تەنها ئەدمین دەتوانێت وشەکان بگۆڕێت. | Only administrators can edit the word list.",
+                ephemeral=True,
+            )
+        gid = str(interaction.guild.id) if interaction.guild else ""
+        current = ", ".join(sorted(antiswear_words_map.get(gid, set())))
+        modal = AntiSwearWordsModal(current_words=current)
+        await interaction.response.send_modal(modal)
 
 
 @bot.command(name="antiswear", aliases=["anti_swear", "swearfilter"])
 @commands.has_permissions(manage_guild=True)
 async def antiswear_cmd(ctx):
-    """Toggle the anti-swear filter and show the tag-style word panel."""
+    """Toggle the anti-swear filter and show the panel to manage its word list."""
     if ctx.guild is None:
         return await ctx.send("Server only. | تەنها لە سێرڤەر.")
-    gid    = str(ctx.guild.id)
-    status = not antiswear_guilds.get(gid, False)
+    gid = str(ctx.guild.id)
+    current = antiswear_guilds.get(gid, False)
+    status = not current
     save_antiswear_enabled(gid, status)
-    embed  = _antiswear_panel_embed(gid)
-    embed.set_footer(
-        text=(
-            f"{'✅ Filter enabled' if status else '❌ Filter disabled'}  •  "
-            f"By: {ctx.author.display_name}  •  "
-            "Use !setantichannel #channel to scope to specific channels"
-        )
+    words = antiswear_words_map.get(gid, set())
+    scoped = antiswear_channels_map.get(gid, set())
+    scope_text = (", ".join(f"<#{c}>" for c in scoped) if scoped
+                  else "هەموو کەناڵەکان | All channels")
+    color = 0x57F287 if status else 0xED4245
+    status_text = ("چالاک | Enabled" if status else "ناچالاک | Disabled")
+    embed = discord.Embed(
+        color=color,
+        title="🚫 فیلتەری قسەی خراپ | Anti-Swear Filter",
+        description=(
+            f"**دۆخ | Status:** {status_text}\n"
+            f"**ژمارەی وشەکان | Words configured:** {len(words)}\n"
+            f"**کەناڵەکان | Scoped channels:** {scope_text}\n\n"
+            "پەیامی کۆنترۆڵکراو دەسڕدرێتەوە و ناردەرەکەی بۆ ١ خولەک بێدەنگ دەکرێت.\n"
+            "Matched messages are deleted and the sender is timed out for 1 minute. "
+            "Staff with Manage Messages/Administrator are exempt.\n\n"
+            "Click **Text Words** below to set the banned words (any number, any words). "
+            "Use `!setantichannel #channel` to limit enforcement to specific channels."
+        ),
     )
+    embed.set_footer(text=f"لەلایەن | By: {ctx.author.display_name}")
     await ctx.send(embed=embed, view=AntiSwearPanelView())
 
 @antiswear_cmd.error
@@ -12855,8 +13343,10 @@ async def removereklam_cmd(ctx):
         )
 
     try:
-        reklam_settings_map.pop(ctx.guild.id, None)
-        _save_all()
+        conn = get_db()
+        conn.execute("DELETE FROM reklam_settings WHERE guild_id=?", (ctx.guild.id,))
+        conn.commit()
+        conn.close()
     except Exception as e:
         return await ctx.send(f"❌ هەڵە: `{e}`")
 
@@ -13390,11 +13880,18 @@ async def staffwarn_cmd(ctx, member: discord.Member = None, *, reason: str = "No
         return await ctx.send("بەکارهێنان: `!staffwarn @ئەندام [هۆکار]` | Usage: `!staffwarn @member [reason]`")
     if member.bot:
         return await ctx.send("❌ ناتوانیت بۆتێک ئاگادار بکەیتەوە. | You can't warn a bot.")
-    _sw_gk = str(ctx.guild.id)
-    _sw_uk = str(member.id)
-    new_count = staff_warnings_db.setdefault(_sw_gk, {}).get(_sw_uk, 0) + 1
-    staff_warnings_db[_sw_gk][_sw_uk] = new_count
-    _save_all()
+    with get_db() as _conn:
+        row = _conn.execute(
+            "SELECT count FROM warnings WHERE guild_id=? AND user_id=?",
+            (ctx.guild.id, member.id)
+        ).fetchone()
+        new_count = (row["count"] if row else 0) + 1
+        _conn.execute(
+            "INSERT INTO warnings (guild_id, user_id, count) VALUES (?,?,?) "
+            "ON CONFLICT(guild_id,user_id) DO UPDATE SET count=excluded.count",
+            (ctx.guild.id, member.id, new_count)
+        )
+        _conn.commit()
     staff_kw = ["staff", "admin", "mod", "owner", "manager", "helper",
                 "ستاف", "ئادمین", "مۆد", "موڵکدار", "بەڕێوەبەر"]
     pings = " ".join(
@@ -13600,12 +14097,14 @@ async def trivia_cmd(ctx, difficulty="medium"):
     session_scores = _trivia_scores_cache.pop(ctx.channel.id, {})
     _trivia_sessions.pop(ctx.channel.id, None)
     if ctx.guild:
-        _tgk = str(ctx.guild.id)
-        _tgd = trivia_scores_data.setdefault(_tgk, {})
-        for uid, score in session_scores.items():
-            _tuk = str(uid)
-            _tgd[_tuk] = _tgd.get(_tuk, 0) + score
-        _save_all()
+        with get_db() as _conn:
+            for uid, score in session_scores.items():
+                _conn.execute(
+                    "INSERT INTO trivia_scores (guild_id, user_id, score) VALUES (?,?,?) "
+                    "ON CONFLICT(guild_id,user_id) DO UPDATE SET score=score+excluded.score",
+                    (ctx.guild.id, uid, score)
+                )
+            _conn.commit()
     if not session_scores:
         return await ctx.send("🎮 یاری کۆتایی هات! هیچکەس هیچ پرسیارێکی وەڵام نەدا. | Game over! Nobody scored.")
     sorted_scores = sorted(session_scores.items(), key=lambda x: x[1], reverse=True)
@@ -13640,7 +14139,12 @@ async def triviascore_cmd(ctx, member: discord.Member = None):
     if ctx.guild is None:
         return await ctx.send("Server only. | تەنها لە سێرڤەر.")
     target = member or ctx.author
-    score = trivia_scores_data.get(str(ctx.guild.id), {}).get(str(target.id), 0)
+    with get_db() as _conn:
+        row = _conn.execute(
+            "SELECT score FROM trivia_scores WHERE guild_id=? AND user_id=?",
+            (ctx.guild.id, target.id)
+        ).fetchone()
+    score = row["score"] if row else 0
     embed = discord.Embed(
         color=0x5865F2,
         title="🧠 خاڵی تریڤیا | Trivia Score",
@@ -13653,11 +14157,11 @@ async def triviascore_cmd(ctx, member: discord.Member = None):
 async def trivialeaderboard_cmd(ctx):
     if ctx.guild is None:
         return await ctx.send("Server only. | تەنها لە سێرڤەر.")
-    _tgd = trivia_scores_data.get(str(ctx.guild.id), {})
-    rows = sorted(
-        [{"user_id": int(uid), "score": sc} for uid, sc in _tgd.items()],
-        key=lambda x: x["score"], reverse=True
-    )[:10]
+    with get_db() as _conn:
+        rows = _conn.execute(
+            "SELECT user_id, score FROM trivia_scores WHERE guild_id=? ORDER BY score DESC LIMIT 10",
+            (ctx.guild.id,)
+        ).fetchall()
     if not rows:
         return await ctx.send("❌ تا ئێستا هیچ یاریزانێک خاڵی نەکەوتووە. | No scores yet.")
     medals = ["🥇", "🥈", "🥉"]
@@ -13698,8 +14202,13 @@ async def setautorole_cmd(ctx, *, role_input: str = None):
         return await ctx.send(f"❌ رۆڵی **{role_input}** نەدۆزرایەوە. | Role **{role_input}** not found.")
     if role >= ctx.guild.me.top_role:
         return await ctx.send("❌ ئەو رۆڵە بەرزتر یان یەکسانە لە رۆڵی منە. | That role is >= mine.")
-    autorole_settings_map[ctx.guild.id] = role.id
-    _save_all()
+    with get_db() as _conn:
+        _conn.execute(
+            "INSERT INTO autorole_settings (guild_id, role_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET role_id=excluded.role_id",
+            (ctx.guild.id, role.id)
+        )
+        _conn.commit()
     embed = discord.Embed(
         color=0x57F287,
         title="✅ ئۆتۆرۆڵ دانراو | Auto-Role Set",
@@ -13724,10 +14233,12 @@ async def setautorole_error(ctx, error):
 async def removeautorole_cmd(ctx):
     if ctx.guild is None:
         return await ctx.send("Server only. | تەنها لە سێرڤەر.")
-    if ctx.guild.id not in autorole_settings_map:
-        return await ctx.send("❌ هیچ ئۆتۆرۆڵێک دانەنراوە. | No auto-role is set.")
-    autorole_settings_map.pop(ctx.guild.id, None)
-    _save_all()
+    with get_db() as _conn:
+        row = _conn.execute("SELECT role_id FROM autorole_settings WHERE guild_id=?", (ctx.guild.id,)).fetchone()
+        if not row:
+            return await ctx.send("❌ هیچ ئۆتۆرۆڵێک دانەنراوە. | No auto-role is set.")
+        _conn.execute("DELETE FROM autorole_settings WHERE guild_id=?", (ctx.guild.id,))
+        _conn.commit()
     await ctx.send("✅ ئۆتۆرۆڵ لادرا. | Auto-role has been removed.")
 
 @removeautorole_cmd.error
@@ -13740,10 +14251,11 @@ async def removeautorole_error(ctx, error):
 async def autorole_cmd(ctx):
     if ctx.guild is None:
         return await ctx.send("Server only. | تەنها لە سێرڤەر.")
-    _ar_rid = autorole_settings_map.get(ctx.guild.id)
-    if not _ar_rid:
+    with get_db() as _conn:
+        row = _conn.execute("SELECT role_id FROM autorole_settings WHERE guild_id=?", (ctx.guild.id,)).fetchone()
+    if not row:
         return await ctx.send("❌ هیچ ئۆتۆرۆڵێک دانەنراوە. | No auto-role is set.")
-    role = ctx.guild.get_role(_ar_rid)
+    role = ctx.guild.get_role(row["role_id"])
     if not role:
         return await ctx.send("⚠️ رۆڵەکە سڕدراوەتەوە. تکایە `!setautorole` دووبارە بەکاربهێنە. | The saved role was deleted. Use `!setautorole` again.")
     embed = discord.Embed(
@@ -13759,18 +14271,35 @@ async def autorole_cmd(ctx):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _get_link_settings(guild_id: int):
-    return link_settings_map.get(str(guild_id))
+    with get_db() as _conn:
+        # migrate: add alignment column if missing
+        try:
+            _conn.execute("ALTER TABLE link_settings ADD COLUMN alignment TEXT DEFAULT 'left'")
+            _conn.commit()
+        except Exception:
+            pass
+        row = _conn.execute(
+            "SELECT label, url, alignment FROM link_settings WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+    return dict(row) if row else None
 
 def _save_link_settings(guild_id: int, label: str, url: str, alignment: str = "left"):
     alignment = alignment.strip().lower()
     if alignment not in ("left", "center", "right"):
         alignment = "left"
-    link_settings_map[str(guild_id)] = {"label": label, "url": url, "alignment": alignment}
-    _save_all()
+    with get_db() as _conn:
+        _conn.execute(
+            "INSERT INTO link_settings (guild_id, label, url, alignment) VALUES (?,?,?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET label=excluded.label, url=excluded.url, alignment=excluded.alignment",
+            (guild_id, label, url, alignment)
+        )
+        _conn.commit()
 
 def _delete_link_settings(guild_id: int):
-    link_settings_map.pop(str(guild_id), None)
-    _save_all()
+    with get_db() as _conn:
+        _conn.execute("DELETE FROM link_settings WHERE guild_id=?", (guild_id,))
+        _conn.commit()
+
 def _build_link_panel_embed(guild, link):
     """Build the main !setuplink panel embed showing current settings."""
     if link:
@@ -14002,406 +14531,6 @@ async def link_cmd(ctx):
 
 if not token:
     raise RuntimeError("No DISCORD_TOKEN found. Set it in your .env file or token.txt.")
-
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ── AUTO-REACTER COMMANDS ──────────────────────────────────────────────────────
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class AutoReactEmojiModal(discord.ui.Modal, title="🎉 Auto-React Emojis"):
-    emojis_input = discord.ui.TextInput(
-        label="Emojis (comma or newline separated)",
-        style=discord.TextStyle.paragraph,
-        placeholder="😂 👍 ❤️  or  <:custom:123456>  — add as many as you want!",
-        max_length=1000,
-        required=False,
-    )
-
-    def __init__(self, current: str = ""):
-        super().__init__()
-        self.emojis_input.default = current
-
-    async def on_submit(self, interaction: discord.Interaction):
-        gid = str(interaction.guild.id) if interaction.guild else None
-        raw = self.emojis_input.value or ""
-        tokens = [t.strip() for t in re.split(r'[,\n]+', raw) if t.strip()]
-        if gid:
-            save_autoreact_emojis(gid, tokens)
-        count = len(autoreact_emojis_map.get(gid, []))
-        await interaction.response.send_message(
-            f"✅ Auto-react emojis updated ({count} emoji(s)). | ئیموجیەکانی ئۆتۆ-ریاکت نوێکرایەوە.",
-            ephemeral=True,
-        )
-
-    async def on_error(self, interaction: discord.Interaction, error: Exception):
-        try:
-            await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
-        except Exception:
-            pass
-
-
-class AutoReactPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🎨 Set Emojis | ئیموجیەکان دابنێ", style=discord.ButtonStyle.primary,
-                       custom_id="autoreact:setemojis", row=0)
-    async def set_emojis_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Administrators only.", ephemeral=True)
-        gid = str(interaction.guild.id)
-        current = " ".join(autoreact_emojis_map.get(gid, []))
-        await interaction.response.send_modal(AutoReactEmojiModal(current=current))
-
-    @discord.ui.button(label="🗑️ Clear All | هەموو سڕینەوە", style=discord.ButtonStyle.danger,
-                       custom_id="autoreact:clear", row=0)
-    async def clear_emojis_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Administrators only.", ephemeral=True)
-        gid = str(interaction.guild.id)
-        save_autoreact_emojis(gid, [])
-        await interaction.response.send_message(
-            "✅ Cleared all auto-react emojis. | هەموو ئیموجیەکان سڕایەوە.", ephemeral=True
-        )
-
-
-@bot.command(name="autoreacter", aliases=["autoreact", "auto_react"])
-@commands.has_permissions(manage_guild=True)
-async def autoreacter_cmd(ctx):
-    """Show the auto-reacter panel.
-    The bot will auto-react to every message with the emojis you set.
-    Works with Unicode emojis (😂 ❤️) AND custom server emojis (<:name:id>).
-    Use !autoreactchannel to limit to specific channels."""
-    if ctx.guild is None:
-        return await ctx.send("Server only.")
-    gid = str(ctx.guild.id)
-    emojis = autoreact_emojis_map.get(gid, [])
-    chans = autoreact_channels_map_ar.get(gid, set())
-    emoji_display = " ".join(emojis) if emojis else "_(none set yet)_"
-    scope_display = (", ".join(f"<#{c}>" for c in chans) if chans else "هەموو کەناڵەکان | All channels")
-    color = 0xFEE75C if emojis else 0x2B2D31
-    embed = discord.Embed(
-        color=color,
-        title="🎉 ئۆتۆ-ریاکتەر | Auto-Reacter",
-        description=(
-            f"**ئیموجیەکان | Emojis:** {emoji_display}\n"
-            f"**کەناڵەکان | Channels:** {scope_display}\n\n"
-            "**چۆن بەکاری بهێنیت | How to use:**\n"
-            "• Click **Set Emojis** to pick which emojis the bot reacts to every message with.\n"
-            "• Supports Unicode emojis (😂 ❤️ 👍) AND custom server emojis!\n"
-            "• You can set as many emojis as you want.\n"
-            "• Use `!autoreactchannel #channel` to limit to a specific channel.\n"
-            "• Run `!autoreactchannel #channel` again to remove it from the scope.\n\n"
-            "• کرتە بکە **Set Emojis** بۆ دیاریکردنی ئیموجیەکان.\n"
-            "• پشتگیری لە ئیموجی یەکینکۆد و ئیموجی تایبەتی سێرڤەر دەکات!\n"
-            "• دەتوانیت هەر چەندێک ئیموجی دابنێیت."
-        ),
-    )
-    await ctx.send(embed=embed, view=AutoReactPanelView())
-
-
-@autoreacter_cmd.error
-async def autoreacter_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need Manage Server permission. | مووچەی بەڕێوەبردنی سێرڤەر پێویستە.")
-
-
-@bot.command(name="autoreactchannel", aliases=["autoreactch", "auto_react_channel"])
-@commands.has_permissions(manage_guild=True)
-async def autoreactchannel_cmd(ctx, target: discord.TextChannel = None):
-    """Limit auto-react to a specific channel (toggle on/off).
-    If no channels are set, the bot reacts in ALL channels.
-    Usage: !autoreactchannel #general"""
-    if ctx.guild is None:
-        return await ctx.send("Server only.")
-    target = target or ctx.channel
-    gid = str(ctx.guild.id)
-    added = toggle_autoreact_channel(gid, target.id)
-    chans = autoreact_channels_map_ar.get(gid, set())
-    scope_text = (", ".join(f"<#{c}>" for c in chans) if chans else "هەموو کەناڵەکان | All channels")
-    if added:
-        desc = (
-            f"✅ {target.mention} زیادکرا بۆ ئۆتۆ-ریاکت. | Added to auto-react scope.\n\n"
-            f"**ئێستا ریاکت دەکات لە | Now reacting in:** {scope_text}"
-        )
-        color = 0x57F287
-    else:
-        desc = (
-            f"➖ {target.mention} لابرا لە ئۆتۆ-ریاکت. | Removed from auto-react scope.\n\n"
-            f"**ئێستا ریاکت دەکات لە | Now reacting in:** {scope_text}"
-        )
-        color = 0xED4245
-    embed = discord.Embed(color=color, description=desc)
-    await ctx.send(embed=embed)
-
-
-@autoreactchannel_cmd.error
-async def autoreactchannel_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need Manage Server permission.")
-    elif isinstance(error, commands.ChannelNotFound):
-        await ctx.send("❌ Channel not found. | کەناڵ نەدۆزرایەوە.")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ── ANTI-EMOJI COMMANDS ────────────────────────────────────────────────────────
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class AntiEmojiModal(discord.ui.Modal, title="🚫 Banned Emojis"):
-    emojis_input = discord.ui.TextInput(
-        label="Banned emojis (comma or newline separated)",
-        style=discord.TextStyle.paragraph,
-        placeholder="😂 🔥 <:custom:123456> — add as many as you want!",
-        max_length=2000,
-        required=False,
-    )
-
-    def __init__(self, current: str = ""):
-        super().__init__()
-        self.emojis_input.default = current
-
-    async def on_submit(self, interaction: discord.Interaction):
-        gid = str(interaction.guild.id) if interaction.guild else None
-        raw = self.emojis_input.value or ""
-        tokens = [t.strip() for t in re.split(r'[,\n]+', raw) if t.strip()]
-        if gid:
-            save_antiemoji_emojis(gid, tokens)
-            if tokens and not antiemoji_guilds.get(gid, False):
-                save_antiemoji_enabled(gid, True)
-        count = len(antiemoji_emojis_map.get(gid, set()))
-        await interaction.response.send_message(
-            f"✅ Banned emoji list updated ({count} emoji(s)). | لیستی ئیموجی قەدەغەکراو نوێکرایەوە.",
-            ephemeral=True,
-        )
-
-    async def on_error(self, interaction: discord.Interaction, error: Exception):
-        try:
-            await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
-        except Exception:
-            pass
-
-
-class AntiEmojiPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📝 Set Banned Emojis | دابنێ", style=discord.ButtonStyle.secondary,
-                       custom_id="antiemoji:set", row=0)
-    async def set_banned_emojis_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Administrators only.", ephemeral=True)
-        gid = str(interaction.guild.id)
-        current = "\n".join(sorted(antiemoji_emojis_map.get(gid, set())))
-        await interaction.response.send_modal(AntiEmojiModal(current=current))
-
-    @discord.ui.button(label="🗑️ Clear All | هەموو سڕینەوە", style=discord.ButtonStyle.danger,
-                       custom_id="antiemoji:clear", row=0)
-    async def clear_banned_emojis_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Administrators only.", ephemeral=True)
-        gid = str(interaction.guild.id)
-        save_antiemoji_emojis(gid, set())
-        await interaction.response.send_message(
-            "✅ Cleared all banned emojis. | هەموو ئیموجیە قەدەغەکراوەکان سڕایەوە.", ephemeral=True
-        )
-
-
-@bot.command(name="antiemoji", aliases=["anti_emoji", "emojifilter"])
-@commands.has_permissions(manage_guild=True)
-async def antiemoji_cmd(ctx):
-    """Toggle the anti-emoji filter and open the management panel.
-    Ban as many Unicode or custom emojis as you want.
-    Messages containing banned emojis are automatically deleted.
-    Use !antiemojichannel to scope to specific channels.
-    Use !addantiemoji to add emojis via command.
-    Use !removeantiemoji to remove individual emojis."""
-    if ctx.guild is None:
-        return await ctx.send("Server only.")
-    gid = str(ctx.guild.id)
-    current = antiemoji_guilds.get(gid, False)
-    status = not current
-    save_antiemoji_enabled(gid, status)
-    emojis = antiemoji_emojis_map.get(gid, set())
-    scoped = antiemoji_channels_map.get(gid, set())
-    scope_text = (", ".join(f"<#{c}>" for c in scoped) if scoped else "هەموو کەناڵەکان | All channels")
-    color = 0x57F287 if status else 0xED4245
-    status_text = "چالاک ✅ | Enabled" if status else "ناچالاک ❌ | Disabled"
-    emoji_preview = " ".join(sorted(emojis)[:20]) or "_(none set yet)_"
-    embed = discord.Embed(
-        color=color,
-        title="🚫 فیلتەری ئیموجی | Anti-Emoji Filter",
-        description=(
-            f"**دۆخ | Status:** {status_text}\n"
-            f"**ژمارەی قەدەغەکراوەکان | Banned emojis:** {len(emojis)}\n"
-            f"**کەناڵەکان | Scoped channels:** {scope_text}\n\n"
-            f"**ئیموجیە قەدەغەکراوەکان | Banned:** {emoji_preview}\n\n"
-            "**چۆن بەکاری بهێنیت | How to use:**\n"
-            "• **Set Banned Emojis** — open the panel, enter as many emojis as you want (unlimited!)\n"
-            "• `!addantiemoji 😂 🔥 <:name:id>` — quickly add multiple emojis via command\n"
-            "• `!removeantiemoji 😂` — remove a specific emoji\n"
-            "• `!listantiemoji` — see all banned emojis\n"
-            "• `!antiemojichannel #channel` — limit enforcement to a specific channel\n\n"
-            "وەقتێک ئیموجی قەدەغەیەک بەکاربهێنرا، پەیامەکە دەسڕێتەوە."
-        ),
-    )
-    await ctx.send(embed=embed, view=AntiEmojiPanelView())
-
-
-@antiemoji_cmd.error
-async def antiemoji_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need Manage Server permission. | مووچەی بەڕێوەبردنی سێرڤەر پێویستە.")
-
-
-@bot.command(name="antiemojichannel", aliases=["antiemojicannel", "anti_emoji_channel"])
-@commands.has_permissions(manage_guild=True)
-async def antiemojichannel_cmd(ctx, target: discord.TextChannel = None):
-    """Limit anti-emoji enforcement to a specific channel (toggle).
-    If no channels are set, enforced everywhere.
-    Usage: !antiemojichannel #general"""
-    if ctx.guild is None:
-        return await ctx.send("Server only.")
-    target = target or ctx.channel
-    gid = str(ctx.guild.id)
-    added = toggle_antiemoji_channel(gid, target.id)
-    scoped = antiemoji_channels_map.get(gid, set())
-    scope_text = (", ".join(f"<#{c}>" for c in scoped) if scoped else "هەموو کەناڵەکان | All channels")
-    if added:
-        desc = (
-            f"✅ {target.mention} زیادکرا بۆ فیلتەری ئیموجی. | Added to anti-emoji scope.\n\n"
-            f"**Scope:** {scope_text}"
-        )
-        color = 0x57F287
-    else:
-        desc = (
-            f"➖ {target.mention} لابرا لە فیلتەری ئیموجی. | Removed from anti-emoji scope.\n\n"
-            f"**Scope:** {scope_text}"
-        )
-        color = 0x99AAB5
-    embed = discord.Embed(color=color, description=desc)
-    await ctx.send(embed=embed)
-
-
-@antiemojichannel_cmd.error
-async def antiemojichannel_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need Manage Server permission.")
-    elif isinstance(error, commands.ChannelNotFound):
-        await ctx.send("❌ Channel not found. | کەناڵ نەدۆزرایەوە.")
-
-
-@bot.command(name="addantiemoji", aliases=["addbannedmoji", "banmoji", "bannemoji"])
-@commands.has_permissions(manage_guild=True)
-async def addantiemoji_cmd(ctx, *emojis):
-    """Add one or more emojis to the banned list — works with Unicode AND custom emojis.
-    Add as many as you want at once!
-    Usage: !addantiemoji 😂 🔥 <:custom:123456>"""
-    if ctx.guild is None:
-        return await ctx.send("Server only.")
-    if not emojis:
-        return await ctx.send(
-            "❌ Please provide at least one emoji.\n"
-            "Usage: !addantiemoji 😂 🔥 <:custom:123456>\n"
-            "تکایە لانیکەم یەک ئیموجی بنووسە."
-        )
-    gid = str(ctx.guild.id)
-    current = set(antiemoji_emojis_map.get(gid, set()))
-    added_list = []
-    for e in emojis:
-        e = e.strip()
-        if e:
-            current.add(e)
-            added_list.append(e)
-    save_antiemoji_emojis(gid, current)
-    if not antiemoji_guilds.get(gid, False):
-        save_antiemoji_enabled(gid, True)
-    total = len(antiemoji_emojis_map.get(gid, set()))
-    embed = discord.Embed(
-        color=0x57F287,
-        title="🚫 Banned Emojis Updated | ئیموجیە قەدەغەکراوەکان نوێکرایەوە",
-        description=(
-            f"**زیادکرا | Added:** {' '.join(added_list)}\n"
-            f"**کۆی قەدەغەکراوەکان | Total banned:** {total} emoji(s)\n\n"
-            "Anti-emoji filter is now **enabled**. | فیلتەری ئیموجی ئێستا **چالاکە**."
-        )
-    )
-    await ctx.send(embed=embed)
-
-
-@addantiemoji_cmd.error
-async def addantiemoji_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need Manage Server permission.")
-
-
-@bot.command(name="removeantiemoji", aliases=["removebannedmoji", "unbanmoji", "unbanemoji"])
-@commands.has_permissions(manage_guild=True)
-async def removeantiemoji_cmd(ctx, *emojis):
-    """Remove one or more emojis from the banned list.
-    Usage: !removeantiemoji 😂 🔥"""
-    if ctx.guild is None:
-        return await ctx.send("Server only.")
-    if not emojis:
-        return await ctx.send("❌ Provide at least one emoji. Usage: !removeantiemoji 😂")
-    gid = str(ctx.guild.id)
-    current = set(antiemoji_emojis_map.get(gid, set()))
-    removed = []
-    not_found = []
-    for e in emojis:
-        e = e.strip()
-        if e in current:
-            current.discard(e)
-            removed.append(e)
-        else:
-            not_found.append(e)
-    save_antiemoji_emojis(gid, current)
-    total = len(antiemoji_emojis_map.get(gid, set()))
-    parts = []
-    if removed:
-        parts.append(f"**سڕایەوە | Removed:** {' '.join(removed)}")
-    if not_found:
-        parts.append(f"**نەدۆزرایەوە | Not in list:** {' '.join(not_found)}")
-    parts.append(f"**کۆی ماوەکان | Remaining:** {total}")
-    embed = discord.Embed(color=0x5865F2, title="🚫 Banned Emojis", description="\n".join(parts))
-    await ctx.send(embed=embed)
-
-
-@removeantiemoji_cmd.error
-async def removeantiemoji_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need Manage Server permission.")
-
-
-@bot.command(name="listantiemoji", aliases=["listbannedmoji", "showbannedemojis"])
-@commands.has_permissions(manage_guild=True)
-async def listantiemoji_cmd(ctx):
-    """List all currently banned emojis for this server."""
-    if ctx.guild is None:
-        return await ctx.send("Server only.")
-    gid = str(ctx.guild.id)
-    emojis = sorted(antiemoji_emojis_map.get(gid, set()))
-    if not emojis:
-        return await ctx.send(
-            "No banned emojis yet. Use !addantiemoji 😂 🔥 to add some. | "
-            "هیچ ئیموجییەک قەدەغە نەکراوە."
-        )
-    listing = "  ".join(emojis)
-    status_txt = "چالاک ✅ | Enabled" if antiemoji_guilds.get(gid, False) else "ناچالاک ❌ | Disabled"
-    embed = discord.Embed(
-        color=0x5865F2,
-        title=f"🚫 ئیموجیە قەدەغەکراوەکان | Banned Emojis ({len(emojis)})",
-        description=listing[:4000],
-    )
-    embed.set_footer(text=f"Filter status: {status_txt}")
-    await ctx.send(embed=embed)
-
-
-@listantiemoji_cmd.error
-async def listantiemoji_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need Manage Server permission.")
-
 
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
  
