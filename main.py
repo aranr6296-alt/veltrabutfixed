@@ -1,16 +1,4 @@
-import subprocess, sys
-subprocess.check_call([
-    sys.executable, "-m", "pip", "install", "--quiet", "--break-system-packages",
-    "discord.py[voice]>=2.3.2",
-    "psycopg2-binary>=2.9.9",
-    "python-dotenv>=1.0.1",
-    "aiohttp>=3.9.5",
-    "yt-dlp>=2024.5.1",
-    "PyNaCl>=1.5.0",
-])
-
 import discord
-from discord.ext import commands, tasks
 from discord.ext import commands, tasks
 import logging
 import json
