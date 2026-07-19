@@ -86,30 +86,58 @@ def get_guild_lang(guild_id) -> str:
 def load_guild_langs():
     global guild_langs
     guild_langs = {}
-    conn = get_db()
-    for row in conn.execute("SELECT guild_id, lang FROM guild_lang_settings"):
-        guild_langs[str(row["guild_id"])] = row["lang"]
-    conn.close()
+    try:
+        conn = get_db()
+        for row in conn.execute("SELECT guild_id, lang FROM guild_lang_settings"):
+            guild_langs[str(row["guild_id"])] = row["lang"]
+        conn.close()
+    except Exception as _e:
+        logging.warning("load_guild_langs skipped (table may not exist yet): %s", _e)
 
 
 
-# --- POSTGRESQL DATABASE SETUP ---
-# Set DATABASE_URL in your Railway environment variables.
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+# --- DATABASE SETUP (auto-detects PostgreSQL vs SQLite) ---
+# • Railway: add a PostgreSQL plugin — DATABASE_URL is set automatically.
+# • Local / no DATABASE_URL: falls back to SQLite file "bot_data.db".
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+_USE_POSTGRES = bool(DATABASE_URL)
 
-import re as _re_pg  # used inside wrapper
+if _USE_POSTGRES and "sslmode" not in DATABASE_URL and DATABASE_URL.startswith("postgres"):
+    DATABASE_URL += ("&" if "?" in DATABASE_URL else "?") + "sslmode=require"
+
+import re as _re_pg       # used inside PG wrapper
+import sqlite3 as _sqlite3  # used inside SQLite wrapper
+
+
+# ── SQL normalisation helpers ────────────────────────────────────────────────
 
 def _pg_adapt_sql(sql: str) -> str:
-    """Convert SQLite-style SQL to PostgreSQL SQL at runtime."""
-    sql = sql.replace('?', '%s')
-    if _re_pg.search(r'\bINSERT\s+OR\s+IGNORE\s+INTO\b', sql, _re_pg.IGNORECASE):
-        sql = _re_pg.sub(r'\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', sql, flags=_re_pg.IGNORECASE)
-        sql = sql.rstrip('; \n') + ' ON CONFLICT DO NOTHING'
+    """Convert SQLite-style SQL to PostgreSQL at runtime."""
+    sql = sql.replace("?", "%s")
+    if _re_pg.search(r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", sql, _re_pg.IGNORECASE):
+        sql = _re_pg.sub(
+            r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", "INSERT INTO", sql,
+            flags=_re_pg.IGNORECASE,
+        )
+        sql = sql.rstrip("; \n") + " ON CONFLICT DO NOTHING"
     return sql
 
 
+def _sqlite_adapt_sql(sql: str) -> str:
+    """Normalise PostgreSQL-isms so the SQL runs on SQLite."""
+    sql = _re_pg.sub(r"\bBIGSERIAL\b",         "INTEGER",  sql, flags=_re_pg.I)
+    sql = _re_pg.sub(r"\bBIGINT\b",             "INTEGER",  sql, flags=_re_pg.I)
+    sql = _re_pg.sub(r"\bSMALLINT\b",           "INTEGER",  sql, flags=_re_pg.I)
+    sql = _re_pg.sub(r"\bDOUBLE PRECISION\b",   "REAL",     sql, flags=_re_pg.I)
+    # SQLite < 3.37 has no "ADD COLUMN IF NOT EXISTS"
+    sql = _re_pg.sub(r"ADD COLUMN IF NOT EXISTS", "ADD COLUMN", sql, flags=_re_pg.I)
+    # PostgreSQL "ON CONFLICT DO NOTHING" is valid in SQLite 3.24+, keep it.
+    return sql
+
+
+# ── PostgreSQL cursor / wrapper ──────────────────────────────────────────────
+
 class _PGCursor:
-    """Wraps a psycopg2 RealDictCursor to behave like sqlite3's cursor."""
     def __init__(self, pg_cur):
         self._c = pg_cur
 
@@ -123,11 +151,20 @@ class _PGCursor:
         return self._c.fetchall()
 
     def executescript(self, sql: str):
-        """Run multiple ;-separated statements (mirrors sqlite3 executescript)."""
-        for stmt in sql.split(';'):
+        for stmt in sql.split(";"):
             s = stmt.strip()
-            if s:
-                self._c.execute(s)
+            if not s:
+                continue
+            try:
+                self._c.execute(_pg_adapt_sql(s))
+                self._c.connection.commit()
+            except Exception as _exc:
+                try:
+                    self._c.connection.rollback()
+                except Exception:
+                    pass
+                if "already exists" not in str(_exc).lower():
+                    logging.warning("PG executescript skipped (%s): %.80s", type(_exc).__name__, s)
 
     def execute(self, sql: str, params=()):
         self._c.execute(_pg_adapt_sql(sql), params or ())
@@ -135,17 +172,29 @@ class _PGCursor:
 
 
 class _PGWrapper:
-    """Thin sqlite3-compatible wrapper around a psycopg2 connection.
-
-    Handles:
-    • ? → %s placeholder conversion
-    • INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING
-    • Row access by column name (RealDictCursor)
-    • commit() / close() / context-manager protocol
-    """
     def __init__(self, dsn: str):
-        self._conn = psycopg2.connect(dsn)
-        self._conn.autocommit = False
+        import time as _t
+        last_exc = None
+        for _attempt in range(1, 6):
+            try:
+                self._conn = psycopg2.connect(
+                    dsn,
+                    connect_timeout=15,
+                    keepalives=1,
+                    keepalives_idle=30,
+                    keepalives_interval=10,
+                    keepalives_count=5,
+                )
+                self._conn.autocommit = False
+                return
+            except psycopg2.OperationalError as _exc:
+                last_exc = _exc
+                logging.warning(
+                    "DB connect attempt %d/5 failed: %s — retrying in %ds",
+                    _attempt, _exc, _attempt * 2,
+                )
+                _t.sleep(_attempt * 2)
+        raise last_exc
 
     def cursor(self) -> _PGCursor:
         return _PGCursor(self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
@@ -176,11 +225,91 @@ class _PGWrapper:
         self.close()
 
 
-def get_db() -> _PGWrapper:
-    return _PGWrapper(DATABASE_URL)
+# ── SQLite cursor / wrapper (used when DATABASE_URL is not set) ──────────────
+
+class _SQLiteCursor:
+    def __init__(self, cur):
+        self._c = cur
+
+    def __iter__(self):
+        return iter(self._c.fetchall())
+
+    def fetchone(self):
+        return self._c.fetchone()
+
+    def fetchall(self):
+        return self._c.fetchall()
+
+    def executescript(self, sql: str):
+        for stmt in sql.split(";"):
+            s = stmt.strip()
+            if not s:
+                continue
+            try:
+                self._c.execute(_sqlite_adapt_sql(s))
+                self._c.connection.commit()
+            except Exception as _exc:
+                try:
+                    self._c.connection.rollback()
+                except Exception:
+                    pass
+                if "already exists" not in str(_exc).lower():
+                    logging.warning("SQLite executescript skipped (%s): %.80s", type(_exc).__name__, s)
+
+    def execute(self, sql: str, params=()):
+        self._c.execute(_sqlite_adapt_sql(sql), params or ())
+        return self
+
+
+class _SQLiteWrapper:
+    """sqlite3 connection with the same interface as _PGWrapper."""
+    def __init__(self, path: str = "bot_data.db"):
+        self._conn = _sqlite3.connect(path, check_same_thread=False)
+        self._conn.row_factory = _sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+
+    def cursor(self) -> _SQLiteCursor:
+        return _SQLiteCursor(self._conn.cursor())
+
+    def execute(self, sql: str, params=()):
+        cur = self._conn.cursor()
+        cur.execute(_sqlite_adapt_sql(sql), params or ())
+        return _SQLiteCursor(cur)
+
+    def executemany(self, sql: str, seq):
+        self._conn.executemany(_sqlite_adapt_sql(sql), seq)
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        try:
+            self._conn.commit()
+        except Exception:
+            pass
+        self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+
+# ── Factory ─────────────────────────────────────────────────────────────────
+
+def get_db():
+    if _USE_POSTGRES:
+        url = DATABASE_URL
+        if "sslmode" not in url and url.startswith("postgres"):
+            url += ("&" if "?" in url else "?") + "sslmode=require"
+        return _PGWrapper(url)
+    return _SQLiteWrapper()
+
 
 def init_db():
     conn = get_db()
+    if _USE_POSTGRES: conn._conn.autocommit = True  # DDL outside tx (PG only)
     c = conn.cursor()
     c.executescript("""
         CREATE TABLE IF NOT EXISTS xp_data (
@@ -470,7 +599,6 @@ def init_db():
             role_ids TEXT DEFAULT ''
         );
     """)
-    conn.commit()
     conn.close()
 
 init_db()
@@ -478,6 +606,7 @@ init_db()
 # --- Migrate existing DBs: add columns added after initial release ---
 def _migrate_db():
     conn = get_db()
+    if _USE_POSTGRES: conn._conn.autocommit = True  # DDL outside tx (PG only)
     migrations = [
         "ALTER TABLE welcome_embed_settings ADD COLUMN IF NOT EXISTS channel_id TEXT DEFAULT ''",
         "ALTER TABLE perk_settings ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''",
@@ -526,7 +655,6 @@ def _migrate_db():
             conn.execute(sql)
         except Exception:
             pass   # column already exists — safe to ignore
-    conn.commit()
     conn.close()
 _migrate_db()
 
@@ -698,12 +826,9 @@ def load_warnings():
     global warnings_data
     warnings_data = {}
     conn = get_db()
-    # Load legacy count-only rows first so guilds/users with no log entries still
-    # appear (their list will be empty, meaning their count was never detailed).
     for row in conn.execute("SELECT guild_id, user_id, count FROM warnings"):
         g, u = str(row["guild_id"]), str(row["user_id"])
         warnings_data.setdefault(g, {}).setdefault(u, [])
-    # Overlay the detailed log entries (reason + moderator + timestamp).
     try:
         for row in conn.execute(
             "SELECT guild_id, user_id, reason, moderator_id, timestamp "
@@ -711,19 +836,18 @@ def load_warnings():
         ):
             g, u = str(row["guild_id"]), str(row["user_id"])
             warnings_data.setdefault(g, {}).setdefault(u, []).append({
-                "reason":    row["reason"]    or "",
+                "reason":    row["reason"]       or "",
                 "moderator": row["moderator_id"] or "",
-                "timestamp": row["timestamp"] or 0,
+                "timestamp": row["timestamp"]    or 0,
             })
     except Exception:
-        pass  # warnings_log table may not exist on first run before migration
+        pass  # table may not exist yet
     conn.close()
 
 def save_warnings():
     conn = get_db()
     for gid, users in warnings_data.items():
         for uid, warn_list in users.items():
-            # warn_list is always a list-of-dicts; count is its length
             count = len(warn_list) if isinstance(warn_list, list) else int(warn_list or 0)
             conn.execute(
                 "INSERT INTO warnings (guild_id, user_id, count) VALUES (?,?,?) "
@@ -2870,7 +2994,6 @@ async def on_message(message):
     if message.guild is not None:
         _np  = message.content.strip()
         _np_lower = _np.lower()
-
         # ── helper: permission check ─────────────────────────────────────────
         def _mod_perm():
             return (
@@ -2885,9 +3008,12 @@ async def on_message(message):
 
         # ── helper: resolve member from a raw token (mention or ID) ──────────
         def _resolve_member(token: str):
-            mid = token.strip("<@!>")
-            if mid.isdigit():
-                return message.guild.get_member(int(mid))
+            try:
+                mid = token.strip("<@!>")
+                if mid.isdigit():
+                    return message.guild.get_member(int(mid))
+            except Exception:
+                pass
             return None
 
         # ════════════════════════════════════════════════════════════════════
@@ -2970,6 +3096,8 @@ async def on_message(message):
                 await message.channel.send(embed=_ok)
             except discord.Forbidden:
                 await message.channel.send("❌ I don't have permission to timeout that member.")
+            except (discord.HTTPException, Exception) as _e_tmo:
+                await message.channel.send(f"❌ Error: {_e_tmo}")
             return
 
         # ════════════════════════════════════════════════════════════════════
@@ -3039,6 +3167,8 @@ async def on_message(message):
                 await message.channel.send(embed=_ok)
             except discord.Forbidden:
                 await message.channel.send("❌ I don't have permission to remove that timeout.")
+            except (discord.HTTPException, Exception) as _e_untmo:
+                await message.channel.send(f"❌ Error: {_e_untmo}")
             return
 
         # ════════════════════════════════════════════════════════════════════
@@ -3116,10 +3246,12 @@ async def on_message(message):
                 await message.channel.send(embed=_ok)
             except discord.Forbidden:
                 await message.channel.send("❌ I don't have permission to change that member's nickname.")
+            except (discord.HTTPException, Exception) as _e_nick:
+                await message.channel.send(f"❌ Error: {_e_nick}")
             return
 
-    # --- PROCESS PREFIX COMMANDS (!command) ---
     await bot.process_commands(message)
+
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -6636,101 +6768,28 @@ async def rps(ctx, choice: str = None):
 sniped = {}       # {channel_id: {"content", "author", "author_avatar", "time"}}
 edit_sniped = {}  # {channel_id: {"before", "after", "author", "author_avatar", "time"}}
 number_games = {}
-# ── HANGMAN constants ───────────────────────────────────────────────────────
 HANGMAN_STAGES = [
-    # 0 wrong guesses
-    (
-        "```"
-        "\n  +---+"
-        "\n  |   |"
-        "\n      |"
-        "\n      |"
-        "\n      |"
-        "\n      |"
-        "\n=========```"
-    ),
-    # 1 wrong guess
-    (
-        "```"
-        "\n  +---+"
-        "\n  |   |"
-        "\n  O   |"
-        "\n      |"
-        "\n      |"
-        "\n      |"
-        "\n=========```"
-    ),
-    # 2 wrong guesses
-    (
-        "```"
-        "\n  +---+"
-        "\n  |   |"
-        "\n  O   |"
-        "\n  |   |"
-        "\n      |"
-        "\n      |"
-        "\n=========```"
-    ),
-    # 3 wrong guesses
-    (
-        "```"
-        "\n  +---+"
-        "\n  |   |"
-        "\n  O   |"
-        "\n /|   |"
-        "\n      |"
-        "\n      |"
-        "\n=========```"
-    ),
-    # 4 wrong guesses
-    (
-        "```"
-        "\n  +---+"
-        "\n  |   |"
-        "\n  O   |"
-        "\n /|\\  |"
-        "\n      |"
-        "\n      |"
-        "\n=========```"
-    ),
-    # 5 wrong guesses
-    (
-        "```"
-        "\n  +---+"
-        "\n  |   |"
-        "\n  O   |"
-        "\n /|\\  |"
-        "\n /    |"
-        "\n      |"
-        "\n=========```"
-    ),
-    # 6 wrong guesses — game over
-    (
-        "```"
-        "\n  +---+"
-        "\n  |   |"
-        "\n  O   |"
-        "\n /|\\  |"
-        "\n / \\  |"
-        "\n      |"
-        "\n=========```"
-    ),
+    "```\n  +---+\n  |   |\n      |\n      |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n      |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n  |   |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|   |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|\\\\  |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|\\\\  |\n /    |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|\\\\  |\n / \\\\  |\n      |\n=========```",
 ]
 
 def render_hangman(game: dict) -> str:
-    """Return a formatted string showing the current hangman state."""
     wrong_count = len(game.get("wrong", set()))
-    stage = HANGMAN_STAGES[min(wrong_count, len(HANGMAN_STAGES) - 1)]
-    word = game.get("word", "")
+    stage   = HANGMAN_STAGES[min(wrong_count, 6)]
+    word    = game.get("word", "")
     guessed = game.get("guessed", set())
     display = " ".join(c if c in guessed else "_" for c in word)
-    wrong_letters = ", ".join(sorted(game.get("wrong", set()))) or "None | هیچ"
-    lives_left = 6 - wrong_count
+    wrong_letters = ", ".join(sorted(game.get("wrong", set()))) or "None"
     return (
         f"{stage}\n"
         f"**وشە | Word:** `{display}`\n"
         f"**هەڵەکان | Wrong:** {wrong_letters}\n"
-        f"**ژیانی ماوە | Lives left:** {lives_left}/6"
+        f"**ژیانی ماوە | Lives left:** {6 - wrong_count}/6"
     )
 
 hangman_games = {}
@@ -8835,8 +8894,14 @@ HELP_CATEGORIES = [
         ("!vcdisconnect @member",             "Disconnect from VC | لە VC دەرببە"),
         ("!anti_link",                        "Toggle anti-link filter | فیلتەری لینک چالاک/ناچالاک"),
         ("!setantilinkchannel [#channel]",    "Scope anti-link to specific channels | کەناڵی فیلتەری لینک"),
-        ("!antiswear",                        "Toggle anti-swear filter + word panel | فیلتەری قسەی خراپ"),
+        ("!antiswear / !asw",                 "Anti-swear panel — add/remove unlimited words | پانێلی فیلتەری قسەی خراپ"),
+        ("!addword word1, word2, ...",         "Add multiple banned words at once | زیادکردنی وشەی قەدەغە"),
         ("!setantichannel [#channel]",        "Scope anti-swear to specific channels | کەناڵی فیلتەری قسەی خراپ"),
+        ("!antiemoji / !ae",                  "Anti-emoji panel — ban unlimited emojis | پانێلی فیلتەری ئیموجی"),
+        ("!addantiemoji 😂 🔥 <:n:id>",       "Quick-add multiple banned emojis | زیادکردنی ئیموجی قەدەغە"),
+        ("!antiemojichannel / !aec [#ch]",    "Scope anti-emoji to specific channels | کەناڵی فیلتەری ئیموجی"),
+        ("!autoreacter / !ar",                "Auto-react panel — react to every message | پانێلی ئۆتۆ-ریاکت"),
+        ("!autoreactchannel / !arc [#ch]",    "Limit auto-react to a specific channel | کەناڵی ئۆتۆ-ریاکت"),
         ("!verify [#channel]",                "Set up / re-post the self-verification panel (admin) | دانانی پانێلی پشتڕاستکردنەوە"),
         ("!seteventspeed",                    "Configure Event Speed text + roles to ping (admin) | دانانی دەق و ڕۆڵی ئیڤێنت سپید"),
         ("!eventspeedpanel",                  "Post the Event Speed announcement (admin) | ناردنی ئیڤێنت سپید"),
@@ -8997,7 +9062,22 @@ PANEL_CATEGORIES = [
         ("!setdonelog #channel",                 "Staff done-log channel — NEEDS: #channel | چانێلی تۆمارکردنی کار — پێویست: #channel"),
         ("!anti_link",                           "Toggle anti-link filter (Manage Server) | فیلتەری لینک"),
         ("!setantilinkchannel [#channel]",       "Scope anti-link to specific channels | کەناڵی فیلتەری لینک"),
-        ("!antiswear",                           "Toggle anti-swear filter + word panel (Manage Server) | فیلتەری قسەی خراپ"),
+        ("!antiswear / !asw",                    "Anti-swear panel — add/remove unlimited words | پانێلی فیلتەری قسەی خراپ"),
+        ("!addword word1, word2, ...",           "Add multiple banned words in one command | زیادکردنی وشەی قەدەغە"),
+        ("!setantichannel [#channel]",           "Scope anti-swear to a channel (toggle) | کەناڵی فیلتەری قسەی خراپ"),
+    ]),
+
+    ("🎉 Auto-React | ئۆتۆ-ریاکت", [
+        ("!autoreacter / !ar",                   "Open auto-react panel — set emojis to auto-react with | پانێلی ئۆتۆ-ریاکت"),
+        ("!autoreactchannel / !arc [#ch]",       "Limit auto-react to a channel (toggle) | کەناڵی ئۆتۆ-ریاکت"),
+    ]),
+
+    ("🚫 Anti-Emoji | فیلتەری ئیموجی", [
+        ("!antiemoji / !ae",                     "Open anti-emoji panel — ban unlimited emojis | پانێلی فیلتەری ئیموجی"),
+        ("!addantiemoji 😂 🔥 <:name:id>",       "Quick-add multiple banned emojis via command | زیادکردنی ئیموجی قەدەغە"),
+        ("!removeantiemoji 😂",                  "Remove a specific banned emoji | سڕینەوەی ئیموجی قەدەغە"),
+        ("!listantiemoji",                       "List all currently banned emojis | لیستی ئیموجیە قەدەغەکراوەکان"),
+        ("!antiemojichannel / !aec [#ch]",       "Scope anti-emoji enforcement to a channel | کەناڵی فیلتەری ئیموجی"),
         ("!setantichannel [#channel]",           "Scope anti-swear to specific channels | کەناڵی فیلتەری قسەی خراپ"),
         ("!verify [#channel]",                   "Set up / re-post the self-verification panel | دانانی پانێلی پشتڕاستکردنەوە"),
         ("!setupstaffdaily",                     "Pick roles pinged by auto staff daily (6 PM Iraq time) + Edit Text button | رۆڵی پینگی دەیلی ستاف و دەقی دیاری بکە"),
@@ -12845,7 +12925,7 @@ class AntiSwearPanelView(discord.ui.View):
             content=status, embed=embed, view=AntiSwearPanelView())
 
 
-@bot.command(name="antiswear", aliases=["anti_swear", "swearfilter"])
+@bot.command(name="antiswear", aliases=["anti_swear", "swearfilter", "asw", "wordfilter"])
 @commands.has_permissions(manage_guild=True)
 async def antiswear_cmd(ctx):
     """Toggle the anti-swear filter and show the tag-style word panel."""
@@ -15409,7 +15489,7 @@ class AutoReactPanelView(discord.ui.View):
         )
 
 
-@bot.command(name="autoreacter", aliases=["autoreact", "auto_react"])
+@bot.command(name="autoreacter", aliases=["autoreact", "auto_react", "ar", "reactpanel", "setreact"])
 @commands.has_permissions(manage_guild=True)
 async def autoreacter_cmd(ctx):
     """Show the auto-reacter panel.
@@ -15450,7 +15530,7 @@ async def autoreacter_error(ctx, error):
         await ctx.send("❌ You need Manage Server permission. | مووچەی بەڕێوەبردنی سێرڤەر پێویستە.")
 
 
-@bot.command(name="autoreactchannel", aliases=["autoreactch", "auto_react_channel"])
+@bot.command(name="autoreactchannel", aliases=["autoreactch", "auto_react_channel", "arc", "reactchannel"])
 @commands.has_permissions(manage_guild=True)
 async def autoreactchannel_cmd(ctx, target: discord.TextChannel = None):
     """Limit auto-react to a specific channel (toggle on/off).
@@ -15549,45 +15629,63 @@ class AntiEmojiPanelView(discord.ui.View):
             "✅ Cleared all banned emojis. | هەموو ئیموجیە قەدەغەکراوەکان سڕایەوە.", ephemeral=True
         )
 
+    @discord.ui.button(label="✅ Enable", style=discord.ButtonStyle.success,
+                       custom_id="antiemoji:enable", row=1)
+    async def enable_filter_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Administrators only.", ephemeral=True)
+        save_antiemoji_enabled(str(interaction.guild.id), True)
+        await interaction.response.send_message(
+            "✅ Anti-emoji filter **enabled**. | فیلتەری ئیموجی چالاک کرا.", ephemeral=True)
 
-@bot.command(name="antiemoji", aliases=["anti_emoji", "emojifilter"])
+    @discord.ui.button(label="❌ Disable", style=discord.ButtonStyle.danger,
+                       custom_id="antiemoji:disable", row=1)
+    async def disable_filter_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Administrators only.", ephemeral=True)
+        save_antiemoji_enabled(str(interaction.guild.id), False)
+        await interaction.response.send_message(
+            "❌ Anti-emoji filter **disabled**. | فیلتەری ئیموجی ناچالاک کرا.", ephemeral=True)
+
+
+@bot.command(name="antiemoji", aliases=["anti_emoji", "emojifilter", "ae", "emojiban"])
 @commands.has_permissions(manage_guild=True)
 async def antiemoji_cmd(ctx):
-    """Toggle the anti-emoji filter and open the management panel.
+    """Open the anti-emoji management panel (no auto-toggle).
     Ban as many Unicode or custom emojis as you want.
-    Messages containing banned emojis are automatically deleted.
-    Use !antiemojichannel to scope to specific channels.
-    Use !addantiemoji to add emojis via command.
-    Use !removeantiemoji to remove individual emojis."""
+    Use Enable/Disable buttons inside the panel to toggle.
+    Use !antiemojichannel to scope to specific channels."""
     if ctx.guild is None:
         return await ctx.send("Server only.")
     gid = str(ctx.guild.id)
-    current = antiemoji_guilds.get(gid, False)
-    status = not current
-    save_antiemoji_enabled(gid, status)
+    status = antiemoji_guilds.get(gid, False)
     emojis = antiemoji_emojis_map.get(gid, set())
     scoped = antiemoji_channels_map.get(gid, set())
     scope_text = (", ".join(f"<#{c}>" for c in scoped) if scoped else "هەموو کەناڵەکان | All channels")
-    color = 0x57F287 if status else 0xED4245
+    color = 0x57F287 if status else 0x2B2D31
     status_text = "چالاک ✅ | Enabled" if status else "ناچالاک ❌ | Disabled"
-    emoji_preview = " ".join(sorted(emojis)[:20]) or "_(none set yet)_"
-    embed = discord.Embed(
-        color=color,
-        title="🚫 فیلتەری ئیموجی | Anti-Emoji Filter",
-        description=(
-            f"**دۆخ | Status:** {status_text}\n"
-            f"**ژمارەی قەدەغەکراوەکان | Banned emojis:** {len(emojis)}\n"
-            f"**کەناڵەکان | Scoped channels:** {scope_text}\n\n"
-            f"**ئیموجیە قەدەغەکراوەکان | Banned:** {emoji_preview}\n\n"
-            "**چۆن بەکاری بهێنیت | How to use:**\n"
-            "• **Set Banned Emojis** — open the panel, enter as many emojis as you want (unlimited!)\n"
-            "• `!addantiemoji 😂 🔥 <:name:id>` — quickly add multiple emojis via command\n"
-            "• `!removeantiemoji 😂` — remove a specific emoji\n"
-            "• `!listantiemoji` — see all banned emojis\n"
-            "• `!antiemojichannel #channel` — limit enforcement to a specific channel\n\n"
-            "وەقتێک ئیموجی قەدەغەیەک بەکاربهێنرا، پەیامەکە دەسڕێتەوە."
-        ),
+    chips = "  ".join(sorted(emojis)[:30]) or "_هیچ نییە | none yet_"
+    embed = discord.Embed(color=color, title="🚫 فیلتەری ئیموجی | Anti-Emoji Filter")
+    embed.add_field(name="دۆخ | Status",   value=status_text,      inline=True)
+    embed.add_field(name="ژمارە | Count",  value=str(len(emojis)), inline=True)
+    embed.add_field(name="کەناڵ | Scope",  value=scope_text[:200], inline=True)
+    embed.add_field(
+        name=f"🏷️  BANNED EMOJIS ({len(emojis)})",
+        value=chips[:1000],
+        inline=False,
     )
+    embed.add_field(
+        name="📌 How to use | چۆن",
+        value=(
+            "• **📝 Set Emojis** — add unlimited emojis via modal\n"
+            "• **🗑️ Clear All** — remove all banned emojis\n"
+            "• **✅ Enable / ❌ Disable** — toggle the filter\n"
+            "• `!addantiemoji 😂 🔥 <:name:id>` — quick-add via command\n"
+            "• `!antiemojichannel #ch` — limit to a specific channel"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="پەیامی ئیموجی قەدەغە ئۆتۆماتیکی دەسڕێتەوە | Banned-emoji messages are auto-deleted.")
     await ctx.send(embed=embed, view=AntiEmojiPanelView())
 
 
@@ -15597,7 +15695,7 @@ async def antiemoji_error(ctx, error):
         await ctx.send("❌ You need Manage Server permission. | مووچەی بەڕێوەبردنی سێرڤەر پێویستە.")
 
 
-@bot.command(name="antiemojichannel", aliases=["antiemojicannel", "anti_emoji_channel"])
+@bot.command(name="antiemojichannel", aliases=["antiemojicannel", "anti_emoji_channel", "aec", "emojibanch"])
 @commands.has_permissions(manage_guild=True)
 async def antiemojichannel_cmd(ctx, target: discord.TextChannel = None):
     """Limit anti-emoji enforcement to a specific channel (toggle).
