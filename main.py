@@ -4560,7 +4560,7 @@ class WelcomeStaffRolePickView(discord.ui.View):
         super().__init__(timeout=120)
         self.guild_id = guild_id
 
-    @discord.ui.role_select(placeholder="🎭 Choose the staff role to watch…", min_values=1, max_values=1)
+    @discord.ui.select(cls=discord.ui.RoleSelect, placeholder="🎭 Choose the staff role to watch…", min_values=1, max_values=1)
     async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
         try:
             role = select.values[0]
