@@ -694,6 +694,9 @@ antiswear_words_map = {}  # {guild_id: set(word, ...)}  — banned words per ser
 antiswear_channels_map = {}  # {guild_id: set(channel_id, ...)}  — channels antiswear is scoped to (empty = all channels)
 _antiswear_regex_cache = {}  # {frozenset(words): compiled regex}  — avoids recompiling every message
 
+# --- COMMAND SHORTCUTS (per-guild: shortcut_name → full_command_name) ---
+commandshortcuts_data = {}  # {guild_id_str: {shortcut_lower: full_command_lower}}
+
 # ── AUTO-REACT globals ──────────────────────────────────────────────────────
 autoreact_emojis_map      = {}  # {guild_id_str: list[str]}  — emojis to react with
 autoreact_channels_map_ar = {}  # {guild_id_str: set(channel_id)}  — empty = all channels
@@ -899,6 +902,57 @@ def save_econ():
             )
     conn.commit()
     conn.close()
+
+def load_commandshortcuts():
+    """Load command shortcuts from DB into memory."""
+    global commandshortcuts_data
+    commandshortcuts_data = {}
+    try:
+        with get_db() as _sc_conn:
+            _sc_conn.cursor().executescript(
+                "CREATE TABLE IF NOT EXISTS command_shortcuts ("
+                "  guild_id BIGINT NOT NULL,"
+                "  shortcut TEXT NOT NULL,"
+                "  full_command TEXT NOT NULL,"
+                "  UNIQUE(guild_id, shortcut)"
+                ")"
+            )
+            for _row in _sc_conn.execute(
+                "SELECT guild_id, shortcut, full_command FROM command_shortcuts"
+            ):
+                commandshortcuts_data.setdefault(
+                    str(_row["guild_id"]), {}
+                )[_row["shortcut"].lower()] = _row["full_command"].lower()
+    except Exception as _e:
+        logging.warning("load_commandshortcuts failed: %s", _e)
+
+def _db_save_commandshortcut(guild_id: int, shortcut: str, full_command: str):
+    """Persist a single shortcut to the DB (upsert via delete+insert)."""
+    try:
+        with get_db() as _sc_conn:
+            _sc_conn.execute(
+                "DELETE FROM command_shortcuts WHERE guild_id=? AND shortcut=?",
+                (guild_id, shortcut.lower()),
+            )
+            _sc_conn.execute(
+                "INSERT INTO command_shortcuts (guild_id, shortcut, full_command) VALUES (?,?,?)",
+                (guild_id, shortcut.lower(), full_command.lower()),
+            )
+            _sc_conn.commit()
+    except Exception as _e:
+        logging.warning("_db_save_commandshortcut failed: %s", _e)
+
+def _db_delete_commandshortcut(guild_id: int, shortcut: str):
+    """Delete a single shortcut from the DB."""
+    try:
+        with get_db() as _sc_conn:
+            _sc_conn.execute(
+                "DELETE FROM command_shortcuts WHERE guild_id=? AND shortcut=?",
+                (guild_id, shortcut.lower()),
+            )
+            _sc_conn.commit()
+    except Exception as _e:
+        logging.warning("_db_delete_commandshortcut failed: %s", _e)
 
 def load_level_channels():
     global level_channels
@@ -2201,6 +2255,7 @@ load_staff_done_text()
 load_ticket_panel_text()
 load_verify_settings()
 load_eventspeed_settings()
+load_commandshortcuts()
 
 # --- BOT EVENTS ---
 
@@ -3022,6 +3077,9 @@ async def on_message(message):
         if _np_lower == "tmo" or _np_lower.startswith("tmo "):
             # ── no args → show cool help embed ───────────────────────────────
             if _np_lower == "tmo":
+                if not _mod_perm():
+                    await bot.process_commands(message)
+                    return
                 _e = discord.Embed(
                     title="⏱️ Command: timeout",
                     description="Timeout a member — prevents them from sending messages,\nadding reactions, or joining voice channels.",
@@ -3249,6 +3307,18 @@ async def on_message(message):
             except (discord.HTTPException, Exception) as _e_nick:
                 await message.channel.send(f"❌ Error: {_e_nick}")
             return
+
+    # ── COMMAND SHORTCUT RESOLUTION ───────────────────────────────────────────
+    # Rewrites !shortcut → !fullcommand before process_commands so only ONE
+    # response fires and both forms always work.
+    if message.guild is not None and message.content.startswith("!"):
+        _sc_split = message.content.split(None, 1)
+        _sc_typed = _sc_split[0][1:].lower()          # strip '!' and lowercase
+        _sc_rest  = _sc_split[1] if len(_sc_split) > 1 else ""
+        _sc_full  = commandshortcuts_data.get(str(message.guild.id), {}).get(_sc_typed)
+        if _sc_full is not None:
+            # Rewrite message so process_commands sees the canonical command
+            message.content = f"!{_sc_full}" + (f" {_sc_rest}" if _sc_rest else "")
 
     await bot.process_commands(message)
 
@@ -15842,6 +15912,165 @@ async def listantiemoji_cmd(ctx):
 async def listantiemoji_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need Manage Server permission.")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# !commandshortcut  —  register / list / remove per-guild command shortcuts
+# ═════════════════════════════════════════════════════════════════════════════
+# Usage:
+#   !commandshortcut !testwelcome !tw   → create shortcut   (!tw works like !testwelcome)
+#   !commandshortcut list               → show all shortcuts in this server
+#   !commandshortcut remove !tw         → delete the !tw shortcut
+#
+# Only server administrators can manage shortcuts.
+# Both the original command AND the shortcut keep working after registration.
+
+@bot.command(name="commandshortcut", aliases=["cmdshortcut", "shortcut"])
+@commands.has_permissions(administrator=True)
+async def commandshortcut_cmd(ctx, *, args: str = ""):
+    """Create, list, or remove command shortcuts (admin only)."""
+    if ctx.guild is None:
+        return await ctx.send("Server only. | تەنها لە سێرڤەر.")
+
+    gid = str(ctx.guild.id)
+    _args = args.strip()
+    _args_lower = _args.lower()
+
+    # ── !commandshortcut list ─────────────────────────────────────────────────
+    if _args_lower in ("list", ""):
+        _sc_map = commandshortcuts_data.get(gid, {})
+        if not _sc_map:
+            embed = discord.Embed(
+                title="📋 Command Shortcuts | ئەکشنە کورتکراوەکان",
+                description=(
+                    "No shortcuts registered yet.\n"
+                    "هیچ کورتکراوەیەک تۆمار نەکراوە.\n\n"
+                    "**Usage:** `!commandshortcut !fullcommand !shortcut`\n"
+                    "**Example:** `!commandshortcut !testwelcome !tw`"
+                ),
+                color=0x3498DB,
+            )
+        else:
+            lines = "\n".join(
+                f"`!{sc}` → `!{full}`"
+                for sc, full in sorted(_sc_map.items())
+            )
+            embed = discord.Embed(
+                title=f"📋 Command Shortcuts ({len(_sc_map)}) | ئەکشنە کورتکراوەکان",
+                description=lines,
+                color=0x3498DB,
+            )
+            embed.set_footer(text="!commandshortcut remove !sc  —  removes a shortcut")
+        return await ctx.send(embed=embed)
+
+    # ── !commandshortcut remove !tw ───────────────────────────────────────────
+    _remove_tokens = _args_lower.split()
+    if _remove_tokens and _remove_tokens[0] == "remove":
+        if len(_remove_tokens) < 2:
+            return await ctx.send(
+                "❌ Usage: `!commandshortcut remove !shortcut`\n"
+                "مثال: `!commandshortcut remove !tw`"
+            )
+        _rem_sc = _remove_tokens[1].lstrip("!")
+        if _rem_sc not in commandshortcuts_data.get(gid, {}):
+            return await ctx.send(
+                f"❌ No shortcut `!{_rem_sc}` found in this server.\n"
+                f"کورتکراوەی `!{_rem_sc}` نەدۆزرایەوە."
+            )
+        commandshortcuts_data.get(gid, {}).pop(_rem_sc, None)
+        _db_delete_commandshortcut(ctx.guild.id, _rem_sc)
+        embed = discord.Embed(
+            description=f"✅ Shortcut `!{_rem_sc}` removed. | کورتکراوە سڕدرایەوە.",
+            color=0xE74C3C,
+        )
+        return await ctx.send(embed=embed)
+
+    # ── !commandshortcut !fullcommand !shortcut ───────────────────────────────
+    _tokens = _args.split()
+    if len(_tokens) < 2:
+        embed = discord.Embed(
+            title="⌨️ !commandshortcut — Help",
+            description=(
+                "Create a shortcut so a short command triggers a longer one.\n"
+                "دروست کردنی کورتکراوە بۆ فەرمانێکی دیکە.\n"
+            ),
+            color=0x5865F2,
+        )
+        embed.add_field(
+            name="Usage | بەکارهێنان",
+            value=(
+                "`!commandshortcut !fullcommand !shortcut`\n"
+                "`!commandshortcut list`\n"
+                "`!commandshortcut remove !shortcut`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Examples | نموونە",
+            value=(
+                "`!commandshortcut !testwelcome !tw`\n"
+                "`!commandshortcut !testboost !tb`\n"
+                "`!commandshortcut !invites !inv`"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Both the original command AND the shortcut keep working")
+        return await ctx.send(embed=embed)
+
+    _full_raw = _tokens[0].lstrip("!").lower()
+    _sc_raw   = _tokens[1].lstrip("!").lower()
+
+    if not _full_raw or not _sc_raw:
+        return await ctx.send("❌ Both commands must be non-empty. | هەردوو فەرمانەکان پێویستن.")
+
+    if _full_raw == _sc_raw:
+        return await ctx.send("❌ Shortcut cannot be the same as the full command. | کورتکراوە ناتوانێ وەک فەرمانەکەی ئەسڵی بێت.")
+
+    # Validate that the full command (or one of its aliases) actually exists
+    _found_cmd = bot.get_command(_full_raw)
+    if _found_cmd is None:
+        return await ctx.send(
+            f"❌ `!{_full_raw}` is not a known command.\n"
+            f"`!{_full_raw}` فەرمانی ناسراو نییە."
+        )
+
+    # Block overwriting an existing real command
+    if bot.get_command(_sc_raw) is not None:
+        return await ctx.send(
+            f"❌ `!{_sc_raw}` is already a real bot command and cannot be used as a shortcut.\n"
+            f"`!{_sc_raw}` پێشتر فەرمانی بۆتەکەیە، ناتوانرێت وەک کورتکراوە بەکاربهێنرێت."
+        )
+
+    # Prevent a shortcut from pointing to another shortcut (avoid chain loops)
+    _existing_shortcuts = commandshortcuts_data.get(gid, {})
+    if _full_raw in _existing_shortcuts:
+        return await ctx.send(
+            f"❌ `!{_full_raw}` is itself a shortcut — shortcuts cannot point to other shortcuts.\n"
+            f"`!{_full_raw}` خۆی کورتکراوەیە — کورتکراوە ناتوانێ بەرەو کورتکراوەی دیکە ببێت."
+        )
+
+    # Save to memory + DB
+    commandshortcuts_data.setdefault(gid, {})[_sc_raw] = _full_raw
+    _db_save_commandshortcut(ctx.guild.id, _sc_raw, _full_raw)
+
+    embed = discord.Embed(
+        title="✅ Shortcut Created | کورتکراوە دروستکرا",
+        description=(
+            f"**`!{_sc_raw}`** now works the same as **`!{_full_raw}`**.\n"
+            f"**`!{_sc_raw}`** ئێستا وەک **`!{_full_raw}`** کار دەکات.\n\n"
+            f"Both `!{_full_raw}` and `!{_sc_raw}` will work. | هەردووکیان کار دەکەن."
+        ),
+        color=0x2ECC71,
+    )
+    embed.set_footer(text=f"Set by {ctx.author} • !commandshortcut list to view all")
+    await ctx.send(embed=embed)
+
+@commandshortcut_cmd.error
+async def commandshortcut_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ تەنها بەڕێوەبەران دەتوانن کورتکراوەکان بەڕێوەببەن. | Only administrators can manage shortcuts.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("Usage: `!commandshortcut !fullcommand !shortcut`  |  `!commandshortcut list`  |  `!commandshortcut remove !shortcut`")
 
 
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
