@@ -649,6 +649,14 @@ def _migrate_db():
             moderator_id TEXT    DEFAULT '',
             timestamp    BIGINT  DEFAULT 0
         )""",
+        """CREATE TABLE IF NOT EXISTS welcomestaff_settings (
+            guild_id    BIGINT PRIMARY KEY,
+            role_id     BIGINT,
+            channel_id  BIGINT,
+            title       TEXT    DEFAULT '',
+            description TEXT    DEFAULT '',
+            color       BIGINT  DEFAULT 5763719
+        )""",
     ]
     for sql in migrations:
         try:
@@ -696,6 +704,14 @@ _antiswear_regex_cache = {}  # {frozenset(words): compiled regex}  — avoids re
 
 # --- COMMAND SHORTCUTS (per-guild: shortcut_name → full_command_name) ---
 commandshortcuts_data = {}  # {guild_id_str: {shortcut_lower: full_command_lower}}
+
+# --- WELCOME STAFF (per-guild staff role welcome embed) ---
+welcomestaff_data = {}  # {guild_id_str: {role_id, channel_id, title, description, color}}
+_WSS_DEFAULTS = {
+    "title":       "Welcome To Staff",
+    "description": "Welcome (user) To The Staff Team\nName : (user.name) 🎉🎉\nTag : (user.tag)",
+    "color":       0x9B59B6,
+}
 
 # ── AUTO-REACT globals ──────────────────────────────────────────────────────
 autoreact_emojis_map      = {}  # {guild_id_str: list[str]}  — emojis to react with
@@ -925,6 +941,102 @@ def load_commandshortcuts():
                 )[_row["shortcut"].lower()] = _row["full_command"].lower()
     except Exception as _e:
         logging.warning("load_commandshortcuts failed: %s", _e)
+
+
+# ── WELCOME STAFF persistence ──────────────────────────────────────────────────
+def load_welcomestaff_settings():
+    global welcomestaff_data
+    welcomestaff_data = {}
+    conn = get_db()
+    try:
+        for row in conn.execute("SELECT * FROM welcomestaff_settings"):
+            welcomestaff_data[str(row["guild_id"])] = {
+                "role_id":     row["role_id"],
+                "channel_id":  row["channel_id"],
+                "title":       row["title"]       or "",
+                "description": row["description"] or "",
+                "color":       row["color"]        or _WSS_DEFAULTS["color"],
+            }
+    except Exception as _e:
+        logging.warning("load_welcomestaff_settings failed: %s", _e)
+    finally:
+        conn.close()
+
+
+def _get_wss(guild_id):
+    gid = str(guild_id)
+    d = welcomestaff_data.get(gid, {})
+    return {
+        "role_id":     d.get("role_id"),
+        "channel_id":  d.get("channel_id"),
+        "title":       d.get("title")       or _WSS_DEFAULTS["title"],
+        "description": d.get("description") or _WSS_DEFAULTS["description"],
+        "color":       d.get("color")        or _WSS_DEFAULTS["color"],
+    }
+
+
+def _save_wss(guild_id, **kwargs):
+    """Upsert welcomestaff_settings fields for a guild."""
+    gid = str(guild_id)
+    current = _get_wss(guild_id).copy()
+    current.update(kwargs)
+    welcomestaff_data[gid] = current
+    conn = get_db()
+    try:
+        if _USE_POSTGRES:
+            conn.execute(
+                """INSERT INTO welcomestaff_settings
+                       (guild_id, role_id, channel_id, title, description, color)
+                   VALUES (%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (guild_id) DO UPDATE SET
+                       role_id=EXCLUDED.role_id,
+                       channel_id=EXCLUDED.channel_id,
+                       title=EXCLUDED.title,
+                       description=EXCLUDED.description,
+                       color=EXCLUDED.color""",
+                (int(guild_id), current["role_id"], current["channel_id"],
+                 current["title"], current["description"], current["color"]),
+            )
+        else:
+            conn.execute("DELETE FROM welcomestaff_settings WHERE guild_id=?", (int(guild_id),))
+            conn.execute(
+                "INSERT INTO welcomestaff_settings "
+                "(guild_id, role_id, channel_id, title, description, color) "
+                "VALUES (?,?,?,?,?,?)",
+                (int(guild_id), current["role_id"], current["channel_id"],
+                 current["title"], current["description"], current["color"]),
+            )
+    except Exception as _e:
+        logging.warning("_save_wss failed: %s", _e)
+    finally:
+        conn.close()
+
+
+def _apply_wss_placeholders(text, member, role):
+    if not text:
+        return text
+    text = text.replace("(user)",         member.mention)
+    text = text.replace("(user.name)",    member.display_name)
+    text = text.replace("(user.tag)",     member.name)
+    text = text.replace("(server)",       member.guild.name)
+    text = text.replace("(role)",         role.name)
+    text = text.replace("(member.count)", f"{member.guild.member_count:,}")
+    return text
+
+
+def _build_wss_embed(s, member, role):
+    title = _apply_wss_placeholders(s.get("title") or _WSS_DEFAULTS["title"], member, role)
+    desc  = _apply_wss_placeholders(s.get("description") or _WSS_DEFAULTS["description"], member, role)
+    color = s.get("color") or _WSS_DEFAULTS["color"]
+    embed = discord.Embed(
+        title=title, description=desc, color=color,
+        timestamp=datetime.datetime.utcnow(),
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    if member.guild.icon:
+        embed.set_author(name=member.guild.name, icon_url=member.guild.icon.url)
+    embed.set_footer(text=f"👑 Staff Welcome · {member.guild.name}")
+    return embed
 
 def _db_save_commandshortcut(guild_id: int, shortcut: str, full_command: str):
     """Persist a single shortcut to the DB (upsert via delete+insert)."""
@@ -2256,6 +2368,7 @@ load_ticket_panel_text()
 load_verify_settings()
 load_eventspeed_settings()
 load_commandshortcuts()
+load_welcomestaff_settings()
 
 # --- BOT EVENTS ---
 
@@ -2991,8 +3104,6 @@ async def on_message(message):
                     color=0xF59E0B,
                     title="📣 داوای ریکلامی نوێ | New Reklam Request",
                     description=(
-                        f"**کەسی داواکار | Requester:** {message.author.mention}\n"
-                        f"**کەناڵ | Channel:** {message.channel.mention}\n\n"
                         f"{bottom}\n\n"
                         f"**کات | Time:** <t:{int(message.created_at.timestamp())}:R>"
                     ),
@@ -3117,12 +3228,12 @@ async def on_message(message):
 
             # ── has args → execute ────────────────────────────────────────────
             if not _mod_perm():
-                await message.channel.send("❌ مووچەی Moderate Members پێویستە. | You need Moderate Members permission.")
+                await message.channel.send("❌ You need Moderate Members permission.")
                 return
             _parts = _np.split(None, 3)
             _tmo_member  = _resolve_member(_parts[1]) if len(_parts) >= 2 else None
             _tmo_minutes = 10
-            _tmo_reason  = "No reason provided | هیچ هۆکارێک نەدراوە"
+            _tmo_reason  = "No reason provided"
             if _tmo_member is None:
                 _e2 = discord.Embed(
                     description="❌ Member not found — mention or ID required.\n`tmo @member [minutes] [reason]`",
@@ -3143,14 +3254,15 @@ async def on_message(message):
             try:
                 await _tmo_member.timeout(_until, reason=_tmo_reason)
                 _ok = discord.Embed(
-                    description=(
-                        f"⏱️ {_tmo_member.mention} بێدەنگ کرا بۆ **{_tmo_minutes}** خولەک.\n"
-                        f"⏱️ Timed out for **{_tmo_minutes}** minute(s).\n"
-                        f"📋 Reason: {_tmo_reason}"
-                    ),
+                    title="🔇 Member Timed Out",
                     color=0xE67E22,
                 )
-                _ok.set_footer(text=f"By {message.author}")
+                _ok.add_field(name="👤 Member", value=_tmo_member.mention, inline=True)
+                _ok.add_field(name="⏱️ Duration", value=f"**{_tmo_minutes}** minute(s)", inline=True)
+                _ok.add_field(name="📋 Reason", value=_tmo_reason, inline=False)
+                _ok.set_thumbnail(url=_tmo_member.display_avatar.url)
+                _ok.set_footer(text=f"Timed out by {message.author}", icon_url=message.author.display_avatar.url)
+                _ok.timestamp = discord.utils.utcnow()
                 await message.channel.send(embed=_ok)
             except discord.Forbidden:
                 await message.channel.send("❌ I don't have permission to timeout that member.")
@@ -3198,7 +3310,7 @@ async def on_message(message):
 
             # ── has args → execute ────────────────────────────────────────────
             if not _mod_perm():
-                await message.channel.send("❌ مووچەی Moderate Members پێویستە. | You need Moderate Members permission.")
+                await message.channel.send("❌ You need Moderate Members permission.")
                 return
             _parts2 = _np.split(None, 2)
             _untmo_member = _resolve_member(_parts2[1]) if len(_parts2) >= 2 else None
@@ -3210,18 +3322,18 @@ async def on_message(message):
                 await message.channel.send(embed=_e2)
                 return
             if _untmo_member.timed_out_until is None:
-                await message.channel.send(f"ℹ️ {_untmo_member.mention} isn't currently timed out. | بێدەنگ نەکراوە.")
+                await message.channel.send(f"ℹ️ {_untmo_member.mention} isn't currently timed out.")
                 return
             try:
                 await _untmo_member.timeout(None, reason=f"Timeout removed by {message.author}")
                 _ok = discord.Embed(
-                    description=(
-                        f"✅ Timeout removed from {_untmo_member.mention}.\n"
-                        f"✅ بێدەنگیی {_untmo_member.mention} لادرا."
-                    ),
+                    title="✅ Timeout Removed",
                     color=0x2ECC71,
                 )
-                _ok.set_footer(text=f"By {message.author}")
+                _ok.add_field(name="👤 Member", value=_untmo_member.mention, inline=True)
+                _ok.set_thumbnail(url=_untmo_member.display_avatar.url)
+                _ok.set_footer(text=f"Removed by {message.author}", icon_url=message.author.display_avatar.url)
+                _ok.timestamp = discord.utils.utcnow()
                 await message.channel.send(embed=_ok)
             except discord.Forbidden:
                 await message.channel.send("❌ I don't have permission to remove that timeout.")
@@ -3309,16 +3421,26 @@ async def on_message(message):
             return
 
     # ── COMMAND SHORTCUT RESOLUTION ───────────────────────────────────────────
-    # Rewrites !shortcut → !fullcommand before process_commands so only ONE
-    # response fires and both forms always work.
-    if message.guild is not None and message.content.startswith("!"):
-        _sc_split = message.content.split(None, 1)
-        _sc_typed = _sc_split[0][1:].lower()          # strip '!' and lowercase
-        _sc_rest  = _sc_split[1] if len(_sc_split) > 1 else ""
-        _sc_full  = commandshortcuts_data.get(str(message.guild.id), {}).get(_sc_typed)
-        if _sc_full is not None:
-            # Rewrite message so process_commands sees the canonical command
-            message.content = f"!{_sc_full}" + (f" {_sc_rest}" if _sc_rest else "")
+    # Rewrites !shortcut / shortcut → !fullcommand before process_commands.
+    # Shortcuts work BOTH with and without the ! prefix.
+    if message.guild is not None:
+        _sc_content = message.content
+        if _sc_content.startswith("!"):
+            _sc_split = _sc_content.split(None, 1)
+            _sc_typed = _sc_split[0][1:].lower()   # strip '!' and lowercase
+            _sc_rest  = _sc_split[1] if len(_sc_split) > 1 else ""
+            _sc_full  = commandshortcuts_data.get(str(message.guild.id), {}).get(_sc_typed)
+            if _sc_full is not None:
+                message.content = f"!{_sc_full}" + (f" {_sc_rest}" if _sc_rest else "")
+        else:
+            # No-prefix shortcut: e.g. typing "tw" fires the same as "!tw"
+            _sc_split2 = _sc_content.strip().split(None, 1)
+            if _sc_split2:
+                _sc_typed2 = _sc_split2[0].lower()
+                _sc_rest2  = _sc_split2[1] if len(_sc_split2) > 1 else ""
+                _sc_full2  = commandshortcuts_data.get(str(message.guild.id), {}).get(_sc_typed2)
+                if _sc_full2 is not None:
+                    message.content = f"!{_sc_full2}" + (f" {_sc_rest2}" if _sc_rest2 else "")
 
     await bot.process_commands(message)
 
@@ -3496,6 +3618,27 @@ async def on_member_update(before, after):
                     await ch.send(embed=embed)
                 except (discord.Forbidden, discord.HTTPException):
                     pass
+
+    # ── Staff-role welcome detection ──────────────────────────────────────────
+    try:
+        ws         = _get_wss(gid)
+        ws_role_id = ws.get("role_id")
+        ws_chan_id  = ws.get("channel_id")
+        if ws_role_id and ws_chan_id:
+            _added_roles = [r for r in after.roles if r not in before.roles]
+            if any(r.id == int(ws_role_id) for r in _added_roles):
+                _ws_ch = after.guild.get_channel(int(ws_chan_id))
+                if _ws_ch:
+                    _staff_role = after.guild.get_role(int(ws_role_id))
+                    if _staff_role is None:
+                        _staff_role = type("_FakeRole", (), {"name": "Staff"})()
+                    _ws_embed = _build_wss_embed(ws, after, _staff_role)
+                    try:
+                        await _ws_ch.send(embed=_ws_embed)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+    except Exception as _wss_err:
+        logging.warning("welcomestaff on_member_update error: %s", _wss_err)
 
     if not log_channels.get(gid):
         return
@@ -4342,6 +4485,247 @@ async def welcomeembedsetup_cmd(ctx):
 async def welcomeembedsetup_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ مووچەی Manage Server پێویستە. | You need Manage Server permission.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WELCOME STAFF  (!welcomestaff  !welcomestaffchannel  !testwelcomestaff)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WelcomeStaffEditTextModal(discord.ui.Modal, title="✏️ Edit Staff Welcome Text"):
+    """Modal: customize title, description, and color of the staff welcome embed."""
+
+    embed_title = discord.ui.TextInput(
+        label="Title  (use (user.name) (server) (role))",
+        placeholder="🎉 Welcome to the Staff Team, (user.name)!",
+        style=discord.TextStyle.short,
+        max_length=256,
+        required=False,
+    )
+    embed_desc = discord.ui.TextInput(
+        label="Description  (use (user) (server) (role))",
+        placeholder="Hey (user)! Welcome to the (role) team in (server)! 🎊",
+        style=discord.TextStyle.paragraph,
+        max_length=2000,
+        required=False,
+    )
+    embed_color = discord.ui.TextInput(
+        label="Color (hex, e.g. 57F287)",
+        placeholder="57F287",
+        style=discord.TextStyle.short,
+        max_length=8,
+        required=False,
+    )
+
+    def __init__(self, guild_id):
+        super().__init__()
+        self.guild_id = guild_id
+        s = _get_wss(guild_id)
+        self.embed_title.default = s.get("title") or _WSS_DEFAULTS["title"]
+        self.embed_desc.default  = s.get("description") or _WSS_DEFAULTS["description"]
+        self.embed_color.default = hex(s.get("color") or _WSS_DEFAULTS["color"])[2:].upper()
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            raw = self.embed_color.value.strip().lstrip("#")
+            color_int = int(raw, 16) if raw else _WSS_DEFAULTS["color"]
+        except ValueError:
+            color_int = _WSS_DEFAULTS["color"]
+        try:
+            _save_wss(
+                self.guild_id,
+                title       = self.embed_title.value.strip() or _WSS_DEFAULTS["title"],
+                description = self.embed_desc.value.strip()  or _WSS_DEFAULTS["description"],
+                color       = color_int,
+            )
+            await interaction.response.send_message(
+                "✅ **Text updated!** Use `!testwelcomestaff` to preview.", ephemeral=True
+            )
+        except Exception as _e:
+            try:
+                await interaction.response.send_message(f"❌ Error saving: `{_e}`", ephemeral=True)
+            except Exception:
+                pass
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        try:
+            await interaction.response.send_message(f"❌ Error: `{error}`", ephemeral=True)
+        except Exception:
+            pass
+
+
+class WelcomeStaffRolePickView(discord.ui.View):
+    """Ephemeral view with a role select sent when 'Choose Role' is clicked."""
+
+    def __init__(self, guild_id):
+        super().__init__(timeout=120)
+        self.guild_id = guild_id
+
+    @discord.ui.role_select(placeholder="🎭 Choose the staff role to watch…", min_values=1, max_values=1)
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        try:
+            role = select.values[0]
+            _save_wss(self.guild_id, role_id=role.id)
+            await interaction.response.send_message(
+                f"✅ **Staff role set to {role.mention}!**\n"
+                "When this role is given to a member, the staff welcome embed will fire.\n"
+                "Use `!testwelcomestaff` to preview the embed.",
+                ephemeral=True,
+            )
+            self.stop()
+        except Exception as _e:
+            try:
+                await interaction.response.send_message(f"❌ Error: `{_e}`", ephemeral=True)
+            except Exception:
+                pass
+
+
+class WelcomeStaffSetupView(discord.ui.View):
+    """Main 2-button panel for !welcomestaff."""
+
+    def __init__(self, guild_id):
+        super().__init__(timeout=300)
+        self.guild_id = guild_id
+
+    @discord.ui.button(label="✏️ Edit Text", style=discord.ButtonStyle.primary, row=0)
+    async def btn_text(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await interaction.response.send_modal(WelcomeStaffEditTextModal(self.guild_id))
+        except Exception as _e:
+            try:
+                await interaction.response.send_message(f"❌ Error: `{_e}`", ephemeral=True)
+            except Exception:
+                pass
+
+    @discord.ui.button(label="🎭 Choose Role", style=discord.ButtonStyle.secondary, row=0)
+    async def btn_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            view = WelcomeStaffRolePickView(self.guild_id)
+            await interaction.response.send_message(
+                "👇 **Pick the staff role** that should trigger the welcome embed:",
+                view=view,
+                ephemeral=True,
+            )
+        except Exception as _e:
+            try:
+                await interaction.response.send_message(f"❌ Error: `{_e}`", ephemeral=True)
+            except Exception:
+                pass
+
+
+@bot.command(name="welcomestaff", aliases=["staffwelcome"])
+@commands.has_permissions(manage_guild=True)
+async def welcomestaff_cmd(ctx):
+    """Interactive panel to set up the staff role welcome embed."""
+    if ctx.guild is None:
+        return await ctx.send("Server only. | تەنها لە سێرڤەر.")
+
+    s   = _get_wss(ctx.guild.id)
+    cid = s.get("channel_id")
+    rid = s.get("role_id")
+
+    panel = discord.Embed(
+        color=0x5865F2,
+        title="👑 Staff Welcome Setup",
+        description=(
+            "When a member receives the configured **staff role**, a welcome embed is sent in the configured channel.\n\n"
+            "**Buttons below:**\n"
+            "• `✏️ Edit Text` — set the title, description, and color\n"
+            "• `🎭 Choose Role` — pick which role triggers the welcome\n\n"
+            "**Placeholders you can use in the text:**\n"
+            "`(user)` → tags the member\n"
+            "`(user.name)` → member's display name\n"
+            "`(server)` → server name\n"
+            "`(role)` → name of the staff role\n"
+            "`(member.count)` → total member count\n\n"
+            "**Also useful:**\n"
+            "`!welcomestaffchannel #channel` — set where the embed is sent\n"
+            "`!testwelcomestaff` — preview the embed\n\n"
+            "**Current settings:**\n"
+            f"📢 Channel: {'<#' + str(cid) + '>' if cid else '`not set`'}\n"
+            f"🎭 Role: {'<@&' + str(rid) + '>' if rid else '`not set`'}"
+        ),
+    )
+    panel.set_footer(
+        text=f"{ctx.guild.name} · each server has its own settings",
+        icon_url=ctx.guild.icon.url if ctx.guild.icon else None,
+    )
+    await ctx.send(embed=panel, view=WelcomeStaffSetupView(ctx.guild.id))
+
+
+@welcomestaff_cmd.error
+async def welcomestaff_cmd_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need Manage Server permission. | مووچەی Manage Server پێویستە.")
+
+
+@bot.command(name="welcomestaffchannel", aliases=["staffwelcomechannel"])
+@commands.has_permissions(manage_guild=True)
+async def welcomestaffchannel_cmd(ctx, channel: discord.TextChannel = None):
+    """Set the channel where staff welcome embeds are posted."""
+    if ctx.guild is None:
+        return await ctx.send("Server only. | تەنها لە سێرڤەر.")
+    if channel is None:
+        return await ctx.send(
+            "❌ Please specify a channel.\n**Usage:** `!welcomestaffchannel #channel`"
+        )
+    _save_wss(ctx.guild.id, channel_id=channel.id)
+    embed = discord.Embed(
+        color=0x57F287,
+        title="✅ Staff Welcome Channel Set!",
+        description=(
+            f"Staff welcome embeds will be sent to {channel.mention}.\n\n"
+            "Use `!welcomestaff` to set the role and customise the text.\n"
+            "Use `!testwelcomestaff` to preview the embed in that channel."
+        ),
+    )
+    embed.set_footer(text=f"Set by {ctx.author.display_name} · {ctx.guild.name}")
+    await ctx.send(embed=embed)
+
+
+@welcomestaffchannel_cmd.error
+async def welcomestaffchannel_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need Manage Server permission. | مووچەی Manage Server پێویستە.")
+    elif isinstance(error, commands.ChannelNotFound):
+        await ctx.send("❌ Channel not found. | کەناڵ نەدۆزرایەوە.")
+
+
+@bot.command(name="testwelcomestaff", aliases=["staffwelcometest", "twstaff"])
+@commands.has_permissions(manage_guild=True)
+async def testwelcomestaff_cmd(ctx):
+    """Send a test staff welcome embed to the configured channel."""
+    if ctx.guild is None:
+        return await ctx.send("Server only. | تەنها لە سێرڤەر.")
+
+    s   = _get_wss(ctx.guild.id)
+    cid = s.get("channel_id")
+    rid = s.get("role_id")
+
+    target = ctx.guild.get_channel(int(cid)) if cid else ctx.channel
+    if target is None:
+        target = ctx.channel
+
+    role = ctx.guild.get_role(int(rid)) if rid else None
+    if role is None:
+        role = type("_FakeRole", (), {"name": "Staff"})()
+
+    embed = _build_wss_embed(s, ctx.author, role)
+    try:
+        await target.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        return await ctx.send(f"❌ Could not send to {target.mention}: `{e}`")
+
+    if target.id != ctx.channel.id:
+        await ctx.send(
+            f"✅ Test staff welcome sent to {target.mention}!",
+            delete_after=5,
+        )
+
+
+@testwelcomestaff_cmd.error
+async def testwelcomestaff_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need Manage Server permission. | مووچەی Manage Server پێویستە.")
 
 
 @bot.command(name="setboostembed", aliases=["boostchannel", "setboost"])
@@ -6721,15 +7105,15 @@ async def nickname_error(ctx, error):
 
 @bot.command(name="timeout", aliases=["tmo"])
 @commands.has_permissions(moderate_members=True)
-async def timeout_cmd(ctx, member: discord.Member, minutes: int = 10, *, reason: str = "No reason provided | هیچ هۆکارێک نەدراوە"):
+async def timeout_cmd(ctx, member: discord.Member, minutes: int = 10, *, reason: str = "No reason provided"):
     await mute(ctx, member, minutes, reason=reason)
 
 @timeout_cmd.error
 async def timeout_cmd_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ مووچەی Moderate Members پێویستە. | You need Moderate Members permission.")
+        await ctx.send("❌ You need Moderate Members permission.")
     elif isinstance(error, commands.MemberNotFound):
-        await ctx.send("❌ ئەندام نەدۆزرایەوە. | Member not found.")
+        await ctx.send("❌ Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: `!timeout @member [minutes] [reason]`")
 
@@ -15925,7 +16309,7 @@ async def listantiemoji_error(ctx, error):
 # Only server administrators can manage shortcuts.
 # Both the original command AND the shortcut keep working after registration.
 
-@bot.command(name="commandshortcut", aliases=["cmdshortcut", "shortcut"])
+@bot.command(name="commandshortcut", aliases=["cmdshortcut", "cmdsshortcut", "shortcut"])
 @commands.has_permissions(administrator=True)
 async def commandshortcut_cmd(ctx, *, args: str = ""):
     """Create, list, or remove command shortcuts (admin only)."""
@@ -15960,7 +16344,7 @@ async def commandshortcut_cmd(ctx, *, args: str = ""):
                 description=lines,
                 color=0x3498DB,
             )
-            embed.set_footer(text="!commandshortcut remove !sc  —  removes a shortcut")
+            embed.set_footer(text="!commandshortcut remove sc  —  removes a shortcut  |  shortcuts work with or without !")
         return await ctx.send(embed=embed)
 
     # ── !commandshortcut remove !tw ───────────────────────────────────────────
@@ -16000,17 +16384,18 @@ async def commandshortcut_cmd(ctx, *, args: str = ""):
             name="Usage | بەکارهێنان",
             value=(
                 "`!commandshortcut !fullcommand !shortcut`\n"
+                "`!commandshortcut !fullcommand shortcut`  (no ! needed)\n"
                 "`!commandshortcut list`\n"
-                "`!commandshortcut remove !shortcut`"
+                "`!commandshortcut remove shortcut`"
             ),
             inline=False,
         )
         embed.add_field(
             name="Examples | نموونە",
             value=(
-                "`!commandshortcut !testwelcome !tw`\n"
-                "`!commandshortcut !testboost !tb`\n"
-                "`!commandshortcut !invites !inv`"
+                "`!commandshortcut !testwelcome tw`\n"
+                "`!commandshortcut !testboost tb`\n"
+                "`!commandshortcut !invites inv`"
             ),
             inline=False,
         )
@@ -16056,9 +16441,8 @@ async def commandshortcut_cmd(ctx, *, args: str = ""):
     embed = discord.Embed(
         title="✅ Shortcut Created | کورتکراوە دروستکرا",
         description=(
-            f"**`!{_sc_raw}`** now works the same as **`!{_full_raw}`**.\n"
-            f"**`!{_sc_raw}`** ئێستا وەک **`!{_full_raw}`** کار دەکات.\n\n"
-            f"Both `!{_full_raw}` and `!{_sc_raw}` will work. | هەردووکیان کار دەکەن."
+            f"**`!{_sc_raw}`** and **`{_sc_raw}`** (no prefix) now work the same as **`!{_full_raw}`**.\n\n"
+            f"✅ `!{_full_raw}`, `!{_sc_raw}`, and `{_sc_raw}` all work."
         ),
         color=0x2ECC71,
     )
