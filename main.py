@@ -1927,8 +1927,7 @@ def save_staff_done_text(guild_id, title, description):
     conn.commit()
     conn.close()
 
-def load_ticket_panel_text()
-load_shop_ticket_settings():
+def load_ticket_panel_text():
     global ticket_panel_text_map
     ticket_panel_text_map = {}
     conn = get_db()
@@ -2476,6 +2475,7 @@ load_autoreact()
 load_antiemoji()
 load_staff_done_text()
 load_ticket_panel_text()
+load_shop_ticket_settings()
 load_verify_settings()
 load_eventspeed_settings()
 load_commandshortcuts()
