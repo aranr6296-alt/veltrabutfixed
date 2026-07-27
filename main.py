@@ -11283,6 +11283,14 @@ class ShopTicketPanelView(discord.ui.View):
         row=0,
     )
     async def create_shop_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Admins manage the system — they don't open tickets themselves
+        if interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message(
+                "⚙️ Administrators manage shop tickets via **Edit Text** and **Set Roles**.\n"
+                "| بەڕێوەبەران ئەم دوگمەیان بۆ نییە — تکایە **Set Roles** یان **Edit Text** بەکاربهێنن.",
+                ephemeral=True,
+            )
+
         try:
             await interaction.response.defer(ephemeral=True)
         except Exception:
@@ -11291,7 +11299,7 @@ class ShopTicketPanelView(discord.ui.View):
         try:
             guild = interaction.guild
             if not guild:
-                return await interaction.followup.send("❌ Server only.", ephemeral=True)
+                return await interaction.followup.send("❌ تەنها لە سێرڤەر.", ephemeral=True)
 
             cfg = get_shop_ticket_cfg(guild.id)
             gid_str = str(guild.id)
@@ -11303,7 +11311,7 @@ class ShopTicketPanelView(discord.ui.View):
                 existing_ch = guild.get_channel(int(existing_cid))
                 if existing_ch:
                     return await interaction.followup.send(
-                        "❌ You already have an open shop ticket: " + existing_ch.mention,
+                        "❌ تکەتێکی کراوەت هەیە: " + existing_ch.mention,
                         ephemeral=True,
                     )
                 open_shop_tickets_map.pop(key, None)
@@ -11343,13 +11351,13 @@ class ShopTicketPanelView(discord.ui.View):
                 )
             except discord.Forbidden:
                 return await interaction.followup.send(
-                    "❌ The bot lacks permission to create channels. "
-                    "Please give it **Manage Channels** + **Manage Roles**.",
+                    "❌ بۆتەکە مووچەی دروستکردنی کەناڵی نییە. "
+                    "تکایە **Manage Channels** + **Manage Roles** پێبدە.",
                     ephemeral=True,
                 )
             except discord.HTTPException as e:
                 return await interaction.followup.send(
-                    "❌ Could not create shop ticket: `" + str(e) + "`",
+                    "❌ تکەتی شۆپ دروست نەکرا: `" + str(e) + "`",
                     ephemeral=True,
                 )
 
@@ -11374,18 +11382,18 @@ class ShopTicketPanelView(discord.ui.View):
                 pass
 
             await interaction.followup.send(
-                "✅ Your shop ticket has been created: " + shop_ch.mention,
+                "✅ تکەتی شۆپەکەت دروستکرا: " + shop_ch.mention,
                 ephemeral=True,
             )
             await shop_ticket_log(
                 guild,
-                "🛒 **Shop ticket opened** by " + interaction.user.mention + " → " + shop_ch.mention,
+                "🛒 **تکەتی شۆپ کرایەوە** لەلایەن " + interaction.user.mention + " ← " + shop_ch.mention,
             )
 
         except Exception as e:
             try:
                 await interaction.followup.send(
-                    "❌ An unexpected error occurred: `" + type(e).__name__ + ": " + str(e) + "`",
+                    "❌ هەڵەیەکی چاوەڕواننەکراو ڕوویدا: `" + type(e).__name__ + ": " + str(e) + "`",
                     ephemeral=True,
                 )
             except Exception:
