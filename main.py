@@ -2398,7 +2398,7 @@ def load_selfrole():
 def _save_selfrole_panel(guild_id, message_id, channel_id, title):
     conn = get_db()
     conn.execute(
-        "INSERT INTO selfrole_panels (guild_id, message_id, channel_id, title) VALUES (%s,%s,%s,%s) ON CONFLICT (message_id) DO UPDATE SET guild_id=EXCLUDED.guild_id, channel_id=EXCLUDED.channel_id, title=EXCLUDED.title",
+        "INSERT INTO selfrole_panels (guild_id, message_id, channel_id, title) VALUES (?,?,?,?) ON CONFLICT (message_id) DO UPDATE SET guild_id=excluded.guild_id, channel_id=excluded.channel_id, title=excluded.title",
         (guild_id, message_id, channel_id, title)
     )
     conn.commit()
@@ -2407,7 +2407,7 @@ def _save_selfrole_panel(guild_id, message_id, channel_id, title):
 def _save_selfrole_entry(guild_id, message_id, emoji, role_id):
     conn = get_db()
     conn.execute(
-        "INSERT INTO selfrole_reactions (guild_id, message_id, emoji, role_id) VALUES (%s,%s,%s,%s) ON CONFLICT (message_id, emoji) DO UPDATE SET guild_id=EXCLUDED.guild_id, role_id=EXCLUDED.role_id",
+        "INSERT INTO selfrole_reactions (guild_id, message_id, emoji, role_id) VALUES (?,?,?,?) ON CONFLICT (message_id, emoji) DO UPDATE SET guild_id=excluded.guild_id, role_id=excluded.role_id",
         (guild_id, message_id, emoji, role_id)
     )
     conn.commit()
@@ -11231,7 +11231,8 @@ class ShopRoleSelectView(discord.ui.View):
         super().__init__(timeout=120)
         self.gid = gid
 
-    @discord.ui.role_select(
+    @discord.ui.select(
+        cls=discord.ui.RoleSelect,
         placeholder="Select roles that can respond to shop tickets...",
         min_values=1,
         max_values=25,
