@@ -11283,14 +11283,6 @@ class ShopTicketPanelView(discord.ui.View):
         row=0,
     )
     async def create_shop_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Admins manage the system — they don't open tickets themselves
-        if interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message(
-                "⚙️ Administrators manage shop tickets via **Edit Text** and **Set Roles**.\n"
-                "| بەڕێوەبەران ئەم دوگمەیان بۆ نییە — تکایە **Set Roles** یان **Edit Text** بەکاربهێنن.",
-                ephemeral=True,
-            )
-
         try:
             await interaction.response.defer(ephemeral=True)
         except Exception:
