@@ -598,6 +598,21 @@ def init_db():
             text     TEXT DEFAULT '',
             role_ids TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS shop_ticket_settings (
+            guild_id         BIGINT PRIMARY KEY,
+            category_id      BIGINT,
+            log_channel_id   BIGINT,
+            panel_channel_id BIGINT,
+            panel_message_id TEXT DEFAULT '',
+            shop_roles       TEXT DEFAULT '[]',
+            embed_text       TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS open_shop_tickets (
+            guild_id   BIGINT,
+            user_id    BIGINT,
+            channel_id BIGINT,
+            PRIMARY KEY (guild_id, user_id)
+        );
     """)
     conn.close()
 
@@ -648,6 +663,21 @@ def _migrate_db():
             reason       TEXT    DEFAULT '',
             moderator_id TEXT    DEFAULT '',
             timestamp    BIGINT  DEFAULT 0
+        )""",
+        """CREATE TABLE IF NOT EXISTS shop_ticket_settings (
+            guild_id         BIGINT PRIMARY KEY,
+            category_id      BIGINT,
+            log_channel_id   BIGINT,
+            panel_channel_id BIGINT,
+            panel_message_id TEXT DEFAULT '',
+            shop_roles       TEXT DEFAULT '[]',
+            embed_text       TEXT DEFAULT ''
+        )""",
+        """CREATE TABLE IF NOT EXISTS open_shop_tickets (
+            guild_id   BIGINT,
+            user_id    BIGINT,
+            channel_id BIGINT,
+            PRIMARY KEY (guild_id, user_id)
         )""",
         """CREATE TABLE IF NOT EXISTS welcomestaff_settings (
             guild_id    BIGINT PRIMARY KEY,
@@ -777,6 +807,8 @@ islam_settings_map = {}   # {guild_id: {channel_id, role_id, text_en, text_ku}}
 islam_last_msg_map  = {}  # {guild_id: message_id}
 staff_done_text_map = {}  # {guild_id: {"title": str, "description": str}}
 ticket_panel_text_map = {}  # {guild_id: {"text_en": str, "text_ku": str}}
+shop_ticket_settings_map = {}  # {guild_id: {category_id, log_channel_id, panel_channel_id, panel_message_id, shop_roles, embed_text}}
+open_shop_tickets_map    = {}  # {(guild_id, user_id): channel_id}
 verify_settings_map = {}  # {guild_id: {"role_id": int, "channel_id": int}}
 eventspeed_settings_map = {}  # {guild_id: {"text": str, "role_ids": [int, ...]}}
 tags_data = {}  # {guild_id_str: {tag_name_lower: {"response": str, "name": str, "created_by": int}}}
@@ -1895,7 +1927,8 @@ def save_staff_done_text(guild_id, title, description):
     conn.commit()
     conn.close()
 
-def load_ticket_panel_text():
+def load_ticket_panel_text()
+load_shop_ticket_settings():
     global ticket_panel_text_map
     ticket_panel_text_map = {}
     conn = get_db()
@@ -1904,6 +1937,84 @@ def load_ticket_panel_text():
             "text_en": row["text_en"] or "", "text_ku": row["text_ku"] or ""
         }
     conn.close()
+
+
+# ── Shop ticket load/save ─────────────────────────────────────────────────────
+
+def load_shop_ticket_settings():
+    global shop_ticket_settings_map, open_shop_tickets_map
+    shop_ticket_settings_map = {}
+    open_shop_tickets_map = {}
+    conn = get_db()
+    try:
+        for row in conn.execute(
+            "SELECT guild_id, category_id, log_channel_id, panel_channel_id, "
+            "panel_message_id, shop_roles, embed_text FROM shop_ticket_settings"
+        ):
+            import json as _json
+            shop_ticket_settings_map[str(row["guild_id"])] = {
+                "category_id":      row["category_id"],
+                "log_channel_id":   row["log_channel_id"],
+                "panel_channel_id": row["panel_channel_id"],
+                "panel_message_id": row["panel_message_id"] or "",
+                "shop_roles":       _json.loads(row["shop_roles"] or "[]"),
+                "embed_text":       row["embed_text"] or "",
+            }
+        for row in conn.execute("SELECT guild_id, user_id, channel_id FROM open_shop_tickets"):
+            open_shop_tickets_map[(str(row["guild_id"]), str(row["user_id"]))] = row["channel_id"]
+    except Exception as _e:
+        logging.warning("load_shop_ticket_settings skipped: %s", _e)
+    conn.close()
+
+
+def save_shop_ticket_settings():
+    import json as _json
+    conn = get_db()
+    for gid, s in shop_ticket_settings_map.items():
+        conn.execute(
+            "INSERT INTO shop_ticket_settings "
+            "(guild_id, category_id, log_channel_id, panel_channel_id, panel_message_id, shop_roles, embed_text) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT (guild_id) DO UPDATE SET "
+            "category_id=excluded.category_id, log_channel_id=excluded.log_channel_id, "
+            "panel_channel_id=excluded.panel_channel_id, panel_message_id=excluded.panel_message_id, "
+            "shop_roles=excluded.shop_roles, embed_text=excluded.embed_text",
+            (int(gid), s.get("category_id"), s.get("log_channel_id"),
+             s.get("panel_channel_id"), s.get("panel_message_id", ""),
+             _json.dumps(s.get("shop_roles", [])), s.get("embed_text", ""))
+        )
+    conn.commit()
+    conn.close()
+
+
+def save_open_shop_tickets():
+    conn = get_db()
+    conn.execute("DELETE FROM open_shop_tickets")
+    for (gid, uid), cid in open_shop_tickets_map.items():
+        conn.execute(
+            "INSERT INTO open_shop_tickets (guild_id, user_id, channel_id) VALUES (?,?,?)",
+            (int(gid), int(uid), int(cid)),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_shop_ticket_cfg(guild_id):
+    return shop_ticket_settings_map.get(str(guild_id), {})
+
+
+async def shop_ticket_log(guild, message):
+    cfg = get_shop_ticket_cfg(guild.id)
+    log_cid = cfg.get("log_channel_id")
+    if not log_cid:
+        return
+    ch = guild.get_channel(int(log_cid))
+    if ch:
+        try:
+            await ch.send(message)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
 
 def save_ticket_panel_text(guild_id, text_en, text_ku):
     gid = str(guild_id)
@@ -2397,6 +2508,8 @@ async def on_ready():
     bot.add_view(VerifyPanelView())
     bot.add_view(AutoReactPanelView())
     bot.add_view(AntiEmojiPanelView())
+    bot.add_view(ShopTicketPanelView())
+    bot.add_view(ShopTicketControlView())
     for mid, buttons in list(rr_data.items()):
         if buttons:
             bot.add_view(ReactionRoleView(mid, buttons))
@@ -3250,6 +3363,13 @@ async def on_message(message):
             if _tmo_minutes < 1 or _tmo_minutes > 40320:
                 await message.channel.send("❌ Duration must be 1–40320 minutes (28 days).")
                 return
+            # ── Role hierarchy check ────────────────────────────────────────────
+            if message.author != message.guild.owner:
+                if _tmo_member.top_role >= message.author.top_role:
+                    await message.channel.send(
+                        "❌ You cannot timeout someone whose role is equal to or higher than yours."
+                    )
+                    return
             _until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=_tmo_minutes)
             try:
                 await _tmo_member.timeout(_until, reason=_tmo_reason)
@@ -6952,6 +7072,14 @@ async def mute(ctx, member: discord.Member, minutes: int = 10, *, reason: str = 
     if minutes < 1 or minutes > 40320:
         await ctx.send("Duration must be between 1 minute and 28 days (40320 minutes). | ماوە دەبێت لە نێوان ١ خولەک و ٢٨ رۆژ (40320 خولەک) بێت.")
         return
+    # ── Role hierarchy check ─────────────────────────────────────────────────
+    if ctx.author != ctx.guild.owner:
+        if member.top_role >= ctx.author.top_role:
+            await ctx.send(
+                "❌ You cannot timeout someone whose role is equal to or higher than yours. | "
+                "ناتوانیت کەسێک بێدەنگ بکەیت کە رۆڵێکی یەکسان یان بەرزتر لە رۆڵی خۆت هەیە."
+            )
+            return
     until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
     try:
         await member.timeout(until, reason=reason)
@@ -10975,6 +11103,545 @@ async def staffsubmitlog_error(ctx, error):
         await ctx.send("❌ مووچەی Manage Server پێویستە. | You need Manage Server permission.")
     elif isinstance(error, commands.ChannelNotFound):
         await ctx.send("❌ کەناڵ نەدۆزرایەوە. | Channel not found.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# --- SHOP TICKET SYSTEM ---
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_shop_ticket_panel_embed(guild_name: str, icon_url: str = None, gid: str = None) -> discord.Embed:
+    import json as _json
+    cfg = shop_ticket_settings_map.get(str(gid), {}) if gid else {}
+    custom_text = cfg.get("embed_text", "").strip()
+    shop_role_ids = cfg.get("shop_roles", [])
+
+    if custom_text:
+        description = custom_text
+    else:
+        description = (
+            "🛒 **Want to buy something? Open a shop ticket!**\n\n"
+            "──────────────────────\n\n"
+            "Click the button below to create a private shop ticket channel.\n"
+            "Our team will assist you with your purchase as soon as possible.\n\n"
+            "**What you can use this for:**\n"
+            "• Buying products or services\n"
+            "• Asking about prices and availability\n"
+            "• Custom orders and bundles\n\n"
+            "──────────────────────\n"
+            f"*{guild_name} | Shop Support*"
+        )
+
+    if shop_role_ids:
+        role_mentions = " ".join(f"<@&{rid}>" for rid in shop_role_ids)
+        description += f"\n\n**Staff who can help:** {role_mentions}"
+
+    embed = discord.Embed(
+        color=0x2ECC71,
+        title=f"🛒 {guild_name} — Shop Tickets",
+        description=description,
+        timestamp=datetime.datetime.utcnow(),
+    )
+    embed.set_footer(text=f"{guild_name} Shop System")
+    if icon_url:
+        embed.set_image(url=icon_url)
+    return embed
+
+
+def build_shop_ticket_welcome_embed(
+    user_mention: str, user_avatar: str, guild_name: str,
+    icon_url: str = None, shop_role_ids: list = None,
+) -> discord.Embed:
+    embed = discord.Embed(
+        color=0x2ECC71,
+        title="🛒 Shop Ticket",
+        description=(
+            f"Hey {user_mention} 👋\n\n"
+            "**Welcome to your shop ticket!**\n"
+            "Our shop team will be with you shortly.\n\n"
+            "Please describe what you would like to buy or ask about.\n\n"
+            "──────────────────────\n"
+            "🔒 To close this ticket, use the **Close** button or `!closeshopticket`."
+        ),
+        timestamp=datetime.datetime.utcnow(),
+    )
+    if user_avatar:
+        embed.set_thumbnail(url=user_avatar)
+    embed.set_footer(text=f"{guild_name} Shop")
+    if icon_url:
+        embed.set_image(url=icon_url)
+    return embed
+
+
+class ShopTicketEditModal(discord.ui.Modal, title="✏️ Edit Shop Ticket Panel Text"):
+    embed_text = discord.ui.TextInput(
+        label="Shop Panel Text",
+        style=discord.TextStyle.paragraph,
+        placeholder="Enter the text to show on the shop panel...",
+        max_length=2000,
+        required=False,
+    )
+
+    def __init__(self, current_text: str = ""):
+        super().__init__()
+        self.embed_text.default = current_text
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            return
+        gid = str(interaction.guild.id)
+        text = self.embed_text.value.strip()
+        cfg = shop_ticket_settings_map.setdefault(gid, {})
+        cfg["embed_text"] = text
+        save_shop_ticket_settings()
+
+        # Live-update the posted panel if we know where it is
+        panel_cid = cfg.get("panel_channel_id")
+        panel_mid = cfg.get("panel_message_id")
+        updated = False
+        if panel_cid and panel_mid:
+            ch = interaction.guild.get_channel(int(panel_cid))
+            if ch:
+                try:
+                    msg = await ch.fetch_message(int(panel_mid))
+                    new_embed = build_shop_ticket_panel_embed(
+                        interaction.guild.name, _guild_icon_url(interaction.guild), gid
+                    )
+                    await msg.edit(embed=new_embed)
+                    updated = True
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
+
+        reply = "✅ Shop panel text updated!"
+        if updated:
+            reply += " Live panel refreshed."
+        else:
+            reply += " Run `!shoppanel` to re-post the panel with the new text."
+        await interaction.response.send_message(reply, ephemeral=True)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        try:
+            await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
+        except Exception:
+            pass
+
+
+class ShopRoleSelectView(discord.ui.View):
+    """One-shot ephemeral view that lets an admin pick which roles can see shop tickets."""
+    def __init__(self, gid: str):
+        super().__init__(timeout=120)
+        self.gid = gid
+
+    @discord.ui.role_select(
+        placeholder="Select roles that can respond to shop tickets...",
+        min_values=1,
+        max_values=25,
+    )
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message(
+                "❌ Only administrators can set shop roles.", ephemeral=True
+            )
+        role_ids = [str(r.id) for r in select.values]
+        cfg = shop_ticket_settings_map.setdefault(self.gid, {})
+        cfg["shop_roles"] = role_ids
+        save_shop_ticket_settings()
+
+        # Live-update the panel embed too
+        panel_cid = cfg.get("panel_channel_id")
+        panel_mid = cfg.get("panel_message_id")
+        if panel_cid and panel_mid and interaction.guild:
+            ch = interaction.guild.get_channel(int(panel_cid))
+            if ch:
+                try:
+                    msg = await ch.fetch_message(int(panel_mid))
+                    new_embed = build_shop_ticket_panel_embed(
+                        interaction.guild.name, _guild_icon_url(interaction.guild), self.gid
+                    )
+                    await msg.edit(embed=new_embed)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
+
+        role_mentions = ", ".join(r.mention for r in select.values)
+        await interaction.response.send_message(
+            f"✅ Shop ticket roles set to: {role_mentions}\n"
+            "These roles can now view and respond to shop tickets.",
+            ephemeral=True,
+        )
+        self.stop()
+
+
+class ShopTicketPanelView(discord.ui.View):
+    """The persistent panel view posted by !shoppanel."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🛒 Create Shop Ticket",
+        style=discord.ButtonStyle.success,
+        custom_id="shopticket:create",
+        row=0,
+    )
+    async def create_shop_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            return
+
+        try:
+            guild = interaction.guild
+            if not guild:
+                return await interaction.followup.send("❌ Server only.", ephemeral=True)
+
+            cfg = get_shop_ticket_cfg(guild.id)
+            gid_str = str(guild.id)
+            uid_str = str(interaction.user.id)
+            key = (gid_str, uid_str)
+
+            existing_cid = open_shop_tickets_map.get(key)
+            if existing_cid:
+                existing_ch = guild.get_channel(int(existing_cid))
+                if existing_ch:
+                    return await interaction.followup.send(
+                        "❌ You already have an open shop ticket: " + existing_ch.mention,
+                        ephemeral=True,
+                    )
+                open_shop_tickets_map.pop(key, None)
+
+            safe_name = "".join(c for c in interaction.user.name.lower() if c.isalnum())[:20] or "user"
+            cat_id    = cfg.get("category_id")
+            category  = guild.get_channel(int(cat_id)) if cat_id else None
+
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                interaction.user:   discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True,
+                    read_message_history=True, attach_files=True,
+                ),
+                guild.me: discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True,
+                    read_message_history=True, manage_channels=True,
+                    manage_messages=True, embed_links=True,
+                ),
+            }
+
+            shop_role_ids = cfg.get("shop_roles", [])
+            for rid in shop_role_ids:
+                role = guild.get_role(int(rid))
+                if role:
+                    overwrites[role] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True,
+                        read_message_history=True, manage_messages=True,
+                        attach_files=True,
+                    )
+
+            try:
+                shop_ch = await guild.create_text_channel(
+                    name="shop-" + safe_name,
+                    category=category,
+                    overwrites=overwrites,
+                )
+            except discord.Forbidden:
+                return await interaction.followup.send(
+                    "❌ The bot lacks permission to create channels. "
+                    "Please give it **Manage Channels** + **Manage Roles**.",
+                    ephemeral=True,
+                )
+            except discord.HTTPException as e:
+                return await interaction.followup.send(
+                    "❌ Could not create shop ticket: `" + str(e) + "`",
+                    ephemeral=True,
+                )
+
+            open_shop_tickets_map[key] = shop_ch.id
+            save_open_shop_tickets()
+
+            welcome_embed = build_shop_ticket_welcome_embed(
+                interaction.user.mention,
+                interaction.user.display_avatar.url,
+                guild.name,
+                _guild_icon_url(guild),
+                shop_role_ids,
+            )
+
+            mention_str = interaction.user.mention
+            for rid in shop_role_ids:
+                mention_str += " <@&" + str(rid) + ">"
+
+            try:
+                await shop_ch.send(content=mention_str, embed=welcome_embed, view=ShopTicketControlView())
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+            await interaction.followup.send(
+                "✅ Your shop ticket has been created: " + shop_ch.mention,
+                ephemeral=True,
+            )
+            await shop_ticket_log(
+                guild,
+                "🛒 **Shop ticket opened** by " + interaction.user.mention + " → " + shop_ch.mention,
+            )
+
+        except Exception as e:
+            try:
+                await interaction.followup.send(
+                    "❌ An unexpected error occurred: `" + type(e).__name__ + ": " + str(e) + "`",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    @discord.ui.button(
+        label="✏️ Edit Text",
+        style=discord.ButtonStyle.secondary,
+        custom_id="shopticket:edit_text",
+        row=0,
+    )
+    async def edit_text(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message(
+                "❌ Only administrators can edit the shop panel text.", ephemeral=True
+            )
+        gid = str(interaction.guild.id) if interaction.guild else ""
+        current_text = shop_ticket_settings_map.get(gid, {}).get("embed_text", "")
+        await interaction.response.send_modal(ShopTicketEditModal(current_text))
+
+    @discord.ui.button(
+        label="👥 Set Roles",
+        style=discord.ButtonStyle.blurple,
+        custom_id="shopticket:set_roles",
+        row=0,
+    )
+    async def set_roles(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message(
+                "❌ Only administrators can set shop roles.", ephemeral=True
+            )
+        gid = str(interaction.guild.id) if interaction.guild else ""
+        view = ShopRoleSelectView(gid)
+        await interaction.response.send_message(
+            "👥 **Select the roles that can respond to shop tickets.**\n"
+            "You can select multiple roles. They will be able to see and reply in all new shop ticket channels.\n"
+            "*(Existing open tickets won't be updated — close and reopen to apply new roles.)*",
+            view=view,
+            ephemeral=True,
+        )
+
+
+class ShopTicketControlView(discord.ui.View):
+    """Persistent view shown inside each shop ticket channel."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🔒 Close Shop Ticket",
+        style=discord.ButtonStyle.danger,
+        custom_id="shopticket:close",
+        row=0,
+    )
+    async def close_shop_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild
+        if not guild:
+            return await interaction.response.send_message("❌ Server only.", ephemeral=True)
+
+        key = None
+        for (gid, uid), cid in list(open_shop_tickets_map.items()):
+            if int(cid) == interaction.channel_id:
+                key = (gid, uid)
+                break
+
+        if key is None:
+            return await interaction.response.send_message(
+                "❌ This is not a shop ticket channel.", ephemeral=True
+            )
+
+        gid, uid = key
+        is_owner = str(interaction.user.id) == uid
+        is_staff = (
+            interaction.user.guild_permissions.administrator
+            or interaction.user.guild_permissions.manage_messages
+        )
+        cfg = get_shop_ticket_cfg(guild.id)
+        for rid in cfg.get("shop_roles", []):
+            role = guild.get_role(int(rid))
+            if role and role in interaction.user.roles:
+                is_staff = True
+                break
+
+        if not (is_owner or is_staff):
+            return await interaction.response.send_message(
+                "❌ Only the ticket owner or shop staff can close this ticket.", ephemeral=True
+            )
+
+        try:
+            await interaction.response.send_message("🔒 Closing shop ticket in 5 seconds...")
+        except Exception:
+            pass
+
+        open_shop_tickets_map.pop(key, None)
+        save_open_shop_tickets()
+        await shop_ticket_log(
+            guild,
+            "🔒 **Shop ticket closed** " + interaction.channel.mention + " by " + interaction.user.mention,
+        )
+        await asyncio.sleep(5)
+        try:
+            await interaction.channel.delete(reason="Shop ticket closed")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
+# ── Shop ticket commands ───────────────────────────────────────────────────────
+
+@bot.command(name="shoppanel", aliases=["shopticket"])
+@commands.has_permissions(administrator=True)
+async def shoppanel_cmd(ctx, channel: discord.TextChannel = None):
+    """Post the shop ticket panel. Usage: !shoppanel [#channel]"""
+    if ctx.guild is None:
+        return await ctx.send("Server only.")
+    target = channel or ctx.channel
+    gid = str(ctx.guild.id)
+    cfg = shop_ticket_settings_map.setdefault(gid, {})
+    cfg["panel_channel_id"] = target.id
+    embed = build_shop_ticket_panel_embed(ctx.guild.name, _guild_icon_url(ctx.guild), gid)
+    panel_msg = await target.send(embed=embed, view=ShopTicketPanelView())
+    cfg["panel_message_id"] = str(panel_msg.id)
+    save_shop_ticket_settings()
+    if target != ctx.channel:
+        await ctx.send(
+            "✅ Shop ticket panel sent to " + target.mention + ".",
+            delete_after=10,
+        )
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+@shoppanel_cmd.error
+async def shoppanel_cmd_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need Administrator permission to use this command.")
+    elif isinstance(error, commands.ChannelNotFound):
+        await ctx.send("❌ Channel not found.")
+
+
+@bot.command(name="setshoproles")
+@commands.has_permissions(administrator=True)
+async def setshoproles_cmd(ctx, *roles: discord.Role):
+    """Set which roles can respond to shop tickets. Usage: !setshoproles @role1 @role2 ..."""
+    if ctx.guild is None:
+        return await ctx.send("Server only.")
+    if not roles:
+        return await ctx.send(
+            "❌ Please mention at least one role.\nUsage: `!setshoproles @role1 @role2 ...`"
+        )
+    gid = str(ctx.guild.id)
+    cfg = shop_ticket_settings_map.setdefault(gid, {})
+    cfg["shop_roles"] = [str(r.id) for r in roles]
+    save_shop_ticket_settings()
+    role_mentions = ", ".join(r.mention for r in roles)
+    await ctx.send(
+        "✅ Shop ticket roles set to: " + role_mentions + "\n"
+        "These roles will be able to see and reply in new shop ticket channels."
+    )
+
+
+@setshoproles_cmd.error
+async def setshoproles_cmd_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need Administrator permission.")
+    elif isinstance(error, commands.RoleNotFound):
+        await ctx.send("❌ One or more roles not found. Mention the roles directly: `!setshoproles @role1 @role2`")
+
+
+@bot.command(name="closeshopticket", aliases=["closeshop"])
+async def closeshopticket_cmd(ctx):
+    """Close the shop ticket in the current channel."""
+    if ctx.guild is None:
+        return await ctx.send("Server only.")
+
+    key = None
+    for (gid, uid), cid in list(open_shop_tickets_map.items()):
+        if int(cid) == ctx.channel.id:
+            key = (gid, uid)
+            break
+
+    if key is None:
+        return await ctx.send("❌ This is not a shop ticket channel.", delete_after=10)
+
+    gid, uid = key
+    is_owner = str(ctx.author.id) == uid
+    is_staff = (
+        ctx.author.guild_permissions.administrator
+        or ctx.author.guild_permissions.manage_messages
+    )
+    cfg = get_shop_ticket_cfg(ctx.guild.id)
+    for rid in cfg.get("shop_roles", []):
+        role = ctx.guild.get_role(int(rid))
+        if role and role in ctx.author.roles:
+            is_staff = True
+            break
+
+    if not (is_owner or is_staff):
+        return await ctx.send(
+            "❌ Only the ticket owner or shop staff can close this ticket.", delete_after=10
+        )
+
+    await ctx.send("🔒 Closing shop ticket in 5 seconds...")
+    open_shop_tickets_map.pop(key, None)
+    save_open_shop_tickets()
+    await shop_ticket_log(
+        ctx.guild,
+        "🔒 **Shop ticket closed** " + ctx.channel.mention + " by " + ctx.author.mention,
+    )
+    await asyncio.sleep(5)
+    try:
+        await ctx.channel.delete(reason="Shop ticket closed")
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+@bot.command(name="setshopticketlog", aliases=["shopticketlog"])
+@commands.has_permissions(administrator=True)
+async def setshopticketlog_cmd(ctx, channel: discord.TextChannel = None):
+    """Set the log channel for shop tickets. Usage: !setshopticketlog [#channel]"""
+    if ctx.guild is None:
+        return
+    target = channel or ctx.channel
+    gid = str(ctx.guild.id)
+    cfg = shop_ticket_settings_map.setdefault(gid, {})
+    cfg["log_channel_id"] = target.id
+    save_shop_ticket_settings()
+    await ctx.send("✅ Shop ticket log channel set to " + target.mention + ".")
+
+
+@setshopticketlog_cmd.error
+async def setshopticketlog_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need Administrator permission.")
+
+
+@bot.command(name="setshopticketchategory", aliases=["shopticketcategory"])
+@commands.has_permissions(manage_guild=True)
+async def setshopticketchategory_cmd(ctx, *, category_name: str):
+    """Set the category for shop ticket channels. Usage: !setshopticketchategory CategoryName"""
+    if ctx.guild is None:
+        return
+    cat = discord.utils.get(ctx.guild.categories, name=category_name)
+    if not cat:
+        return await ctx.send("❌ Category `" + category_name + "` not found.")
+    gid = str(ctx.guild.id)
+    cfg = shop_ticket_settings_map.setdefault(gid, {})
+    cfg["category_id"] = cat.id
+    save_shop_ticket_settings()
+    await ctx.send("✅ Shop ticket category set to **" + cat.name + "**.")
+
+
+@setshopticketchategory_cmd.error
+async def setshopticketchategory_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need Manage Server permission.")
+
 
 @bot.command(name="ticketstatus")
 @commands.has_permissions(manage_guild=True)
