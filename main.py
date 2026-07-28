@@ -2827,16 +2827,16 @@ async def on_message(message):
                     try:
                         away = humanize_seconds(time.time() - data.get("since", time.time()))
                         embed = discord.Embed(
-                            title="👋  Welcome Back! | بەخێربووتەوە!",
+                            title="👋  Welcome Back!",
                             color=discord.Color.from_rgb(87, 242, 135),
                         )
                         embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
-                        embed.add_field(name="⏱️ You were away for | دوور بوویت بۆ ماوەی", value=f"**{away}**", inline=True)
+                        embed.add_field(name="⏱️ You were away for", value=f"**{away}**", inline=True)
                         if data.get("reason") and data["reason"] != "AFK":
-                            embed.add_field(name="📝 Your reason was | هۆکارەکەت بوو", value=f"*{data['reason']}*", inline=True)
+                            embed.add_field(name="📝 Your reason was", value=f"*{data['reason']}*", inline=True)
                         if data.get("image_url"):
                             embed.set_thumbnail(url=data["image_url"])
-                        embed.set_footer(text="Glad to have you back! | خۆشحاڵین کە گەڕایتەوە!")
+                        embed.set_footer(text="Glad to have you back!")
                         await message.channel.send(embed=embed)
                     except discord.Forbidden:
                         pass
@@ -9294,12 +9294,11 @@ async def afk(ctx, *, reason: str = "AFK"):
     embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
     embed.add_field(name="📝 Reason | هۆکار", value=f"*{reason}*", inline=False)
     embed.add_field(name="🕐 AFK Since | AFK لەکاتی", value=f"<t:{int(afk_since)}:R>", inline=True)
-    embed.add_field(name="🔔 Pings? | پینگ؟", value="I'll notify others who ping you | ئاگادارکردنەوەی ئەوانەی پینگت دەکەن", inline=True)
     if image_url:
         embed.set_image(url=image_url)
     else:
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
-    embed.set_footer(text="Send any message to come back • Your nickname & status are updated | هەر پەیامێک بنێرە بۆ گەڕانەوە • ناو و دۆخت نوێکراوەتەوە")
+    embed.set_footer(text="Send any message to come back • Your nickname & status are updated")
     await ctx.send(embed=embed)
 
 @bot.command(name="editafk")
@@ -11153,20 +11152,18 @@ def build_shop_ticket_welcome_embed(
 ) -> discord.Embed:
     embed = discord.Embed(
         color=0x2ECC71,
-        title="🛒 Shop Ticket",
+        title="🛒 تیکەتی شۆپ",
         description=(
-            f"Hey {user_mention} 👋\n\n"
-            "**Welcome to your shop ticket!**\n"
-            "Our shop team will be with you shortly.\n\n"
-            "Please describe what you would like to buy or ask about.\n\n"
+            f"{user_mention}\n\n"
+            "بەخێربێی تیمەکەمان بە زوترین کات وەڵامت ددەدەنەوە تکایە پێمان بڵێ بەتەمای چ شتێک بکڕی\n\n"
             "──────────────────────\n"
-            "🔒 To close this ticket, use the **Close** button or `!closeshopticket`."
+            "🔒 بۆ داخستنی تیکەتەکە، دوگمەی **Close** بەکاربهێنە یان `!closeshopticket`"
         ),
         timestamp=datetime.datetime.utcnow(),
     )
     if user_avatar:
         embed.set_thumbnail(url=user_avatar)
-    embed.set_footer(text=f"{guild_name} Shop")
+    embed.set_footer(text=f"{guild_name} شۆپ")
     if icon_url:
         embed.set_image(url=icon_url)
     return embed
@@ -15480,11 +15477,8 @@ class StaffDoneView(discord.ui.View):
         # Send ephemeral thank-you only visible to the presser
         try:
             await interaction.followup.send(
-                f"### 🎉 {interaction.user.mention}\n"
-                "**دەستت خۆش! باشی کردووت — سوپاس! 💪**\n"
-                "ئومێدوارین بەردەوام بیت و مەیەوە بیجێبهێڵیت!\n\n"
-                "**Hey, you did great — thank you! 💪**\n"
-                "Keep it up and make sure you stay consistent!",
+                f"{interaction.user.mention}\n"
+                "دەست خۆش کارێکی باشتکرد",
                 ephemeral=True,
             )
         except Exception:
